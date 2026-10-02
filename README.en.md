@@ -1,6 +1,6 @@
 # Zigbee Devices Manager
 
-[![Download demo](https://img.shields.io/badge/%E2%AC%87%EF%B8%8F-Download%20demo-0b7bd6?style=for-the-badge)](https://raw.githubusercontent.com/BuRnEd4AiM/Zigbee-Devices-Manager/main/demo/zigbee-devices-manager-demo.html)
+[![Download demo](https://img.shields.io/badge/%E2%AC%87%EF%B8%8F-Download%20demo-0b7bd6?style=for-the-badge)](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases/download/demo/zigbee-devices-manager-demo.html)
 
 Home Assistant add-on with its own sidebar panel ("Zigbee Namen") to view, edit and assign
 names for all Zigbee devices (ZHA and Zigbee2MQTT) following a fixed naming scheme.
@@ -26,7 +26,7 @@ Settings → Add-ons → Add-on Store → ⋮ → Repositories → add
 
 ## Demo
 
-**[⬇️ Download the demo](https://raw.githubusercontent.com/BuRnEd4AiM/Zigbee-Devices-Manager/main/demo/zigbee-devices-manager-demo.html)** (right-click → "Save link as…", then open in a browser) · [View on GitHub](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/blob/main/demo/zigbee-devices-manager-demo.html)
+**[⬇️ Download the demo](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases/download/demo/zigbee-devices-manager-demo.html)** (right-click → "Save link as…", then open in a browser) · [View on GitHub](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/blob/main/demo/zigbee-devices-manager-demo.html)
 
 `demo/zigbee-devices-manager-demo.html` is a standalone file (no backend): download it and open it in
 a browser. Rebuild with `python3 scripts/build_demo.py` (also available as a GitHub Actions artifact).

@@ -1,6 +1,6 @@
 # Zigbee Devices Manager
 
-[![Demo herunterladen](https://img.shields.io/badge/%E2%AC%87%EF%B8%8F-Demo%20herunterladen-0b7bd6?style=for-the-badge)](https://raw.githubusercontent.com/BuRnEd4AiM/Zigbee-Devices-Manager/main/demo/zigbee-devices-manager-demo.html)
+[![Demo herunterladen](https://img.shields.io/badge/%E2%AC%87%EF%B8%8F-Demo%20herunterladen-0b7bd6?style=for-the-badge)](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases/download/demo/zigbee-devices-manager-demo.html)
 
 English version: [README.en.md](README.en.md)
 
@@ -28,7 +28,7 @@ Einstellungen → Add-ons → Add-on-Store → ⋮ → Repositories →
 
 ## Demo
 
-**[⬇️ Demo herunterladen](https://raw.githubusercontent.com/BuRnEd4AiM/Zigbee-Devices-Manager/main/demo/zigbee-devices-manager-demo.html)** (Rechtsklick → „Link speichern unter…“, dann im Browser öffnen) · [Ansicht auf GitHub](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/blob/main/demo/zigbee-devices-manager-demo.html)
+**[⬇️ Demo herunterladen](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases/download/demo/zigbee-devices-manager-demo.html)** (startet direkt den Download, danach im Browser öffnen) · [Ansicht auf GitHub](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/blob/main/demo/zigbee-devices-manager-demo.html)
 
 `demo/zigbee-devices-manager-demo.html` ist eine eigenständige Datei (ohne Backend) – einfach
 herunterladen und im Browser öffnen. Neu erzeugen mit `python3 scripts/build_demo.py`
