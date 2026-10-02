@@ -100,6 +100,7 @@ const DEFAULT_SCHEME = {
   ]
 };
 
+const DEMO_AREAS = ["Wohnzimmer", "Küche", "Schlafzimmer", "Bad", "Flur", "Büro", "Terrasse", "Keller"].map(n => ({id: "area_" + n.toLowerCase().replace("ü", "ue"), name: n}));
 const DEMO_BRIDGES = [{id: "b1", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 1)"}, {id: "b2", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 2)"}];
 const DEMO_DEVICES = [
   ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0001", "Wohnzimmer", "Wohnzimmer Stehlampe"],
@@ -117,7 +118,7 @@ const DEMO_DEVICES = [
   ["TRADFRI remote control", "IKEA of Sweden", "E1524", "0x680ae2fffe1a0010", "Wohnzimmer", null],
   ["Zigbee Coordinator", "Texas Instruments", "CC2652P", "0x00124b0030aa0000", "", "Koordinator"]
 ].map((d, i) => ({id: "demo" + i, source: "z2m", bridge: i < 8 ? "b1" : "b2", orig_name: d[0], manufacturer: d[1], model: d[2], ieee: d[3], area: d[4],
-  is_new: !d[5], name: d[5] || d[3]}));
+  is_new: !d[5], name: d[5] || d[3], area_id: d[4] ? "area_" + d[4].toLowerCase().replace("ü", "ue") : ""}));
 
 // ---------- Hilfsfunktionen ----------
 const $ = (s, el = document) => el.querySelector(s);
@@ -179,7 +180,7 @@ const api = {
     try { store = JSON.parse(localStorage.getItem("zdm-demo-store") || "{}"); } catch (e) {}
     let devices = clone(DEMO_DEVICES);
     try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); devices.forEach(d => { if (n[d.id]) { d.name = n[d.id]; d.is_new = false; } }); } catch (e) {}
-    return {devices, store, bridges: DEMO_BRIDGES};
+    return {devices, store, bridges: DEMO_BRIDGES, areas: DEMO_AREAS};
   },
   async saveStore(store) {
     if (this.demo) { try { localStorage.setItem("zdm-demo-store", JSON.stringify(store)); } catch (e) {} return; }
@@ -238,14 +239,35 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameEntities: false, updateRefs: true, updateYaml: false, updateNodered: false};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameEntities: false, updateRefs: true, updateYaml: false, updateNodered: false};
 
 function persist() {
   clearTimeout(persist.t);
   persist.t = setTimeout(() => api.saveStore({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways}).catch(e => toast("Speichern fehlgeschlagen: " + e.message)), 300);
 }
 const allRows = () => [...S.devices, ...S.planned.map(p => ({id: p.id, name: p.name, orig_name: "", manufacturer: "", model: "", ieee: "", area: "", is_new: false, planned: true}))];
-const roomOf = d => { const id = S.meta[d.id]?.room; return S.scheme.rooms.find(r => r.id === id) || S.scheme.rooms.find(r => d.area && r.name.toLowerCase() === d.area.toLowerCase()); };
+const roomOf = d => { const id = S.meta[d.id]?.room; return S.scheme.rooms.find(r => r.id === id) || S.scheme.rooms.find(r => d.area_id && r.area_id === d.area_id) || S.scheme.rooms.find(r => d.area && r.name.toLowerCase() === d.area.toLowerCase()); };
+
+/** Kürzel für einen neuen Raum: erste Buchstaben des Namens, eindeutig unter den vorhandenen Räumen. */
+function makeAbbr(name, rooms) {
+  const letters = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9]/g, "");
+  const taken = new Set(rooms.map(r => r.abbr.toLowerCase()));
+  for (let n = 2; n <= letters.length; n++) { const a = letters.slice(0, n).toUpperCase(); if (!taken.has(a.toLowerCase())) return a; }
+  let i = 2; while (taken.has((letters.slice(0, 2) + i).toLowerCase())) i++;
+  return letters.slice(0, 2).toUpperCase() + i;
+}
+/** Übernimmt Bereiche aus Home Assistant als Räume (verknüpft vorhandene gleichnamige, legt fehlende an). Gibt die Zahl neuer Räume zurück. */
+function syncAreas() {
+  const sc = S.scheme; sc.ignoredAreas = sc.ignoredAreas || []; let added = 0, changed = false;
+  for (const a of S.areas) {
+    if (sc.rooms.some(r => r.area_id === a.id) || sc.ignoredAreas.includes(a.id)) continue;
+    const same = sc.rooms.find(r => !r.area_id && r.name.toLowerCase() === a.name.toLowerCase());
+    if (same) { same.area_id = a.id; changed = true; continue; }
+    sc.rooms.push({id: uid("r"), name: a.name, abbr: makeAbbr(a.name, sc.rooms), area_id: a.id}); added++;
+  }
+  if (added || changed) persist();
+  return added;
+}
 const typeOf = d => S.scheme.types.find(t => t.id === S.meta[d.id]?.type);
 const gwOf = d => S.gateways[d.bridge] || {};
 const houseOf = d => S.scheme.houses.find(h => h.id === (S.meta[d.id]?.house || gwOf(d).house || S.scheme.defaultHouse));
@@ -488,7 +510,7 @@ function renderScheme() {
   const used = new Set(), ex = [];
   for (const [h, r, t] of [[h0, r0, t0], [h0, r0, t0], [h0, r0, t0], [h0, r1, t0], [h1, r0, t0], [h0, r0, sc.types[1] || t0]]) { const n = nextName(sc, r, t, used, h); used.add(n.toLowerCase()); ex.push(n); }
   const list = (kind, items) => items.map(i => `<div class="row" data-id="${i.id}">
-      <input data-k="name" value="${esc(i.name)}" placeholder="Name"><input class="abbr" data-k="abbr" value="${esc(i.abbr)}" placeholder="Kürzel" maxlength="8">
+      <input data-k="name" value="${esc(i.name)}" placeholder="Name"><input class="abbr" data-k="abbr" value="${esc(i.abbr)}" placeholder="Kürzel" maxlength="8">${i.area_id ? `<span class="badge" title="Mit Home-Assistant-Bereich verknüpft">HA</span>` : ""}
       <button class="x" data-del="${kind}" title="Entfernen">✕</button></div>`).join("");
   $("#tab-scheme").innerHTML = `<div class="grid">
     <div class="panel"><h2>Muster</h2>
@@ -507,7 +529,7 @@ function renderScheme() {
       <p class="sub">Der Zähler zählt je Raum+Typ automatisch hoch und überspringt bereits vergebene Namen.</p>
     </div>
     <div class="panel list"><h2>Häuser / Präfix</h2>${list("houses", sc.houses)}<button class="btn" data-add="houses">＋ Haus</button></div>
-    <div class="panel list"><h2>Räume</h2>${list("rooms", sc.rooms)}<button class="btn" data-add="rooms">＋ Raum</button></div>
+    <div class="panel list"><h2>Räume</h2>${list("rooms", sc.rooms)}<button class="btn" data-add="rooms">＋ Raum</button> <button class="btn" id="syncAreas" title="Bereiche aus Home Assistant als Räume übernehmen">⟳ Bereiche aus HA</button>${S.areas.length ? "" : ` <span class="sub">(keine Bereiche gefunden)</span>`}</div>
     <div class="panel list"><h2>Gerätetypen</h2>${list("types", sc.types)}<button class="btn" data-add="types">＋ Typ</button></div>
   </div>`;
   const root = $("#tab-scheme");
@@ -517,6 +539,7 @@ function renderScheme() {
   root.querySelectorAll("[data-tok]").forEach(b => b.onclick = () => { sc.pattern += b.dataset.tok; upd(); });
   $("#ex", root).onchange = e => { if (e.target.value) { sc.pattern = e.target.value; if (e.target.value.includes("{house}")) sc.case = "keep"; upd(); } };
   $("#dh", root).onchange = e => { sc.defaultHouse = e.target.value; upd(); };
+  $("#syncAreas", root).onclick = () => { sc.ignoredAreas = []; const n = syncAreas(); toast(n ? n + " Räume aus Home Assistant übernommen" : "Alle Bereiche sind schon vorhanden"); renderScheme(); };
   $("#case", root).onchange = e => { sc.case = e.target.value; upd(); };
   $("#cst", root).onchange = e => { c.style = e.target.value; upd(); };
   $("#cpad", root).onchange = e => { c.pad = Math.max(1, +e.target.value || 1); upd(); };
@@ -524,7 +547,10 @@ function renderScheme() {
   root.querySelectorAll(".list .row").forEach(row => {
     const kind = row.parentElement.querySelector("[data-add]").dataset.add, item = sc[kind].find(i => i.id === row.dataset.id);
     row.querySelectorAll("input").forEach(inp => inp.onchange = () => { item[inp.dataset.k] = inp.value.trim(); upd(); });
-    row.querySelector("[data-del]").onclick = () => { sc[kind] = sc[kind].filter(i => i !== item); upd(); };
+    row.querySelector("[data-del]").onclick = () => {
+      if (item.area_id) sc.ignoredAreas = [...(sc.ignoredAreas || []), item.area_id]; // nicht automatisch neu anlegen
+      sc[kind] = sc[kind].filter(i => i !== item); upd();
+    };
   });
   root.querySelectorAll("[data-add]").forEach(b => b.onclick = () => { sc[b.dataset.add].push({id: uid("x"), name: "Neu", abbr: "NE"}); upd(); });
 }
@@ -567,10 +593,12 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   S.devices = data.devices; S.bridges = data.bridges || [];
   const st = data.store || {};
   S.gateways = st.gateways || {};
+  S.areas = data.areas || [];
   if (st.scheme?.pattern) S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, ...st.scheme};
   S.meta = st.meta || {}; S.planned = st.planned || [];
   if (api.error) $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--new)"><b>Verbindung zu Home Assistant fehlgeschlagen.</b> Das Add-on läuft, kann aber keine Geräte laden – keine Demo-Daten.<br><code>${esc(api.error)}</code><br><button class="btn" style="margin-top:8px" onclick="location.reload()">Erneut versuchen</button> <a href="api/diag" target="_blank">Diagnose öffnen</a> <span class="sub">(Details auch im Add-on-Log)</span></div>`;
   else if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee-Geräte geladen und umbenannt.</div>`;
+  syncAreas();
   renderDevices();
 })();
 </script>

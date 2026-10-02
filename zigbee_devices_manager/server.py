@@ -131,9 +131,11 @@ async def get_state(request):
             "ieee": ieee,
             "source": source,
             "area": area_names.get(d.get("area_id"), ""),
+            "area_id": d.get("area_id") or "",
         })
     used = {d["bridge"] for d in out}
     return web.json_response({"devices": out, "store": load_store(),
+                              "areas": [{"id": a["area_id"], "name": a["name"]} for a in areas],
                               "bridges": [b for b in bridges.values() if b["id"] in used or b["source"] == "z2m"]})
 
 

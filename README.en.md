@@ -14,6 +14,7 @@ German version: [README.md](README.md)
   - Automatic counter per room+type that skips names already in use
   - Counter as Arabic (`01`), Roman (`III`) or letters (`C`)
   - UPPER / lower / as typed
+- **Rooms from Home Assistant:** all HA areas are imported as rooms automatically (abbreviation suggested and editable); devices get their HA area preselected as room. "⟳ Bereiche aus HA" in the scheme tab re-syncs; deleted rooms are not re-added on their own.
 - **House prefix:** patterns with `{house}`, e.g. `{house}-{room}-{type}{nr}` → `H1-wzfl-lband01`. Houses, rooms and types with their own abbreviations, a default house plus per-device choice
 - Multi-select → assign room/type → "apply suggestions"
 - **Verification after renaming:** the add-on re-reads Home Assistant and shows ✅/⚠️/❌ for device names (up to 15 s wait for Z2M), entity IDs and leftover old references in automations, YAML and Node-RED. "Re-check" reads again.
