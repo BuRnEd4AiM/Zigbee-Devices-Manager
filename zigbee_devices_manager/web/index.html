@@ -359,12 +359,22 @@ function patternRegex(sc) {
   }
   return {re: new RegExp("^" + src + "$", "i"), keys};
 }
+/** Raum zu einem Kürzel aus dem Namen. Teilen sich mehrere Räume das Kürzel (z. B. „Bad (H1)“ und „Bad (S2)“), zählt der Code von Haus+Etage;
+ *  ein Raum mit anderem Code wird nie genommen. */
+function resolveRoom(abbr, houseId, floorId) {
+  const sc = S.scheme, h = sc.houses.find(x => x.id === houseId), f = sc.floors.find(x => x.id === floorId);
+  const cands = sc.rooms.filter(r => r.abbr.toLowerCase() === abbr.toLowerCase());
+  const code = useHouse() && useFloor() && h && f ? (h.abbr + f.abbr).toLowerCase() : null;
+  if (!code) return cands[0]?.id;
+  return (cands.find(r => roomCodes(r).includes(code)) || cands.find(r => !roomCodes(r).length))?.id;
+}
 /** Zerlegt einen vorhandenen Namen nach dem Muster: {house, floor, room, type, nr} (IDs bzw. Nummer) oder null. */
 function parseName(name) {
   const pr = patternRegex(S.scheme); if (!pr) return null;
   const m = pr.re.exec((name || "").trim()); if (!m) return null;
   const sc = S.scheme, lists = {house: sc.houses, floor: sc.floors, room: sc.rooms, type: sc.types}, out = {};
-  pr.keys.forEach((k, i) => { const v = m[i + 1]; out[k] = k === "nr" ? v : lists[k].find(x => x.abbr.toLowerCase() === v.toLowerCase())?.id; });
+  pr.keys.forEach((k, i) => { const v = m[i + 1]; if (k !== "room") out[k] = k === "nr" ? v : lists[k].find(x => x.abbr.toLowerCase() === v.toLowerCase())?.id; });
+  const ri = pr.keys.indexOf("room"); if (ri >= 0) out.room = resolveRoom(m[ri + 1], out.house, out.floor);
   return out;
 }
 /** Erkennt auch Teile eines Namens: führende Bausteine (z. B. „S2“ = Haus+Etage), selbst wenn Raum oder Typ unbekannt sind. */
@@ -389,7 +399,8 @@ function parseNameLoose(name) {
     if (!keys) continue;
     const mm = new RegExp("^" + src.slice(0, end), "i").exec(text); if (!mm) continue;
     const out = {};
-    keys.forEach((key, i) => { out[key] = key === "nr" ? mm[i + 1] : lists[key].find(x => x.abbr.toLowerCase() === mm[i + 1].toLowerCase())?.id; });
+    keys.forEach((key, i) => { if (key !== "room") out[key] = key === "nr" ? mm[i + 1] : lists[key].find(x => x.abbr.toLowerCase() === mm[i + 1].toLowerCase())?.id; });
+    const ri = keys.indexOf("room"); if (ri >= 0) out.room = resolveRoom(mm[ri + 1], out.house, out.floor);
     return out;
   }
   return null;
@@ -403,7 +414,15 @@ function syncFromNames(overwrite) {
     if (!p) continue;
     if (!overwrite && Object.keys(S.meta[d.id] || {}).length) { if (full) matched++; continue; }
     const m = {...S.meta[d.id]};
-    for (const k of ["house", "floor", "room", "type"]) if (p[k]) m[k] = p[k];
+    for (const k of ["house", "floor", "room", "type"]) {
+      if (!(k in p)) continue;
+      if (p[k]) m[k] = p[k]; else if (overwrite) delete m[k]; // im Namen erkannt, aber kein passender Eintrag: alte Auswahl verwerfen
+    }
+    if (overwrite && m.room && m.house && m.floor) { // bisher gewählter Raum mit fremdem Haus/Etage-Code wird verworfen
+      const h = S.scheme.houses.find(x => x.id === m.house), f = S.scheme.floors.find(x => x.id === m.floor), r = S.scheme.rooms.find(x => x.id === m.room);
+      const code = h && f && useHouse() && useFloor() ? (h.abbr + f.abbr).toLowerCase() : null;
+      if (code && r && roomCodes(r).length && !roomCodes(r).includes(code)) delete m.room;
+    }
     S.meta[d.id] = m; if (full) matched++;
   }
   persist();
