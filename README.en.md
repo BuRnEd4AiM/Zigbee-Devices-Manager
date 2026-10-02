@@ -34,9 +34,9 @@ a browser. Rebuild with `python3 scripts/build_demo.py` (also available as a Git
 ## Notes
 
 - Default: rename in the Home Assistant device registry (`name_by_user`).
-- **Zigbee2MQTT:** with "rename entity IDs / in Z2M" ticked, the device is renamed in Z2M itself (friendly name,
-  MQTT topic and HA entity IDs) via `mqtt.publish` to `<base_topic>/bridge/request/device/rename`. Set the base topic
-  in the add-on options (`z2m_base_topic`, default `zigbee2mqtt`). The result is not reported back; check the first devices in Z2M.
-- Automations/dashboards using old entity IDs are not updated.
+- **Rename entity IDs:** shows a preview of the new entity IDs first. For Zigbee2MQTT the device is also renamed in Z2M itself
+  (via `mqtt.publish` to `<base_topic>/bridge/request/device/rename`; set the base topic in the add-on options: `z2m_base_topic`).
+- **Update references:** replaces the old entity IDs in automations, scripts, scenes and dashboards managed via the UI.
+  Preview first, old configs are backed up to `/data/backups/`. YAML files and YAML dashboards are not modified.
 - Pairing new devices still happens in ZHA/Z2M; they show up here as "new" automatically.
 - Scheme and assignments are stored in the add-on's `/data/store.json`.
