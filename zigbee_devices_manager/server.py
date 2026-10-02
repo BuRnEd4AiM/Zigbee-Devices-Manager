@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import time
+import uuid
 import unicodedata
 from pathlib import Path
 
@@ -143,6 +144,88 @@ async def get_state(request):
                               "bridges": [b for b in bridges.values() if b["id"] in used or b["source"] == "z2m"]})
 
 
+PROGRESS = {}
+
+
+def prog_start(pid, total):
+    if pid:
+        PROGRESS[pid] = {"done": 0, "total": max(total, 1), "label": "Starte …"}
+        for old in list(PROGRESS)[:-20]:  # alte Einträge verwerfen
+            PROGRESS.pop(old, None)
+
+
+def prog(pid, label, inc=1):
+    if pid and pid in PROGRESS:
+        p = PROGRESS[pid]
+        p["label"] = label
+        p["done"] = min(p["done"] + inc, p["total"] - 1)
+
+
+def prog_end(pid):
+    if pid and pid in PROGRESS:
+        PROGRESS[pid].update(done=PROGRESS[pid]["total"], label="Fertig")
+
+
+async def progress(request):
+    return web.json_response(PROGRESS.get(request.query.get("id", ""), {"done": 0, "total": 1, "label": "…"}))
+
+
+async def z2m_request(base, action, payload, timeout=12):
+    """Sendet eine Anfrage an Zigbee2MQTT und wartet auf dessen Antwort unter <base>/bridge/response/<action>.
+    Liefert Z2Ms Antwort ({"status": "ok"|"error", ...}) oder {"status": "timeout"}."""
+    if not TOKEN:
+        raise web.HTTPServiceUnavailable(text="Kein SUPERVISOR_TOKEN – läuft nicht als Add-on")
+    txn = uuid.uuid4().hex
+    request_msg = {**payload, "transaction": txn}
+    publish = {"type": "call_service", "domain": "mqtt", "service": "publish", "service_data": {
+        "topic": f"{base}/bridge/request/{action}", "payload": json.dumps(request_msg)}}
+    try:
+        async with ClientSession() as session, session.ws_connect(WS_URL, max_msg_size=0) as ws:
+            await ws.receive_json()
+            await ws.send_json({"type": "auth", "access_token": TOKEN})
+            if (await ws.receive_json())["type"] != "auth_ok":
+                raise web.HTTPBadGateway(text="Authentifizierung bei Home Assistant fehlgeschlagen")
+            await ws.send_json({"id": 1, "type": "mqtt/subscribe", "topic": f"{base}/bridge/response/{action}"})
+            while True:
+                reply = await asyncio.wait_for(ws.receive_json(), 10)
+                if reply.get("id") == 1 and reply.get("type") == "result":
+                    break
+            subscribed = reply.get("success", False)
+            await ws.send_json({"id": 2, **publish})
+            deadline = time.monotonic() + timeout
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return {"status": "timeout" if subscribed else "unknown"}
+                try:
+                    msg = await asyncio.wait_for(ws.receive_json(), left)
+                except asyncio.TimeoutError:
+                    return {"status": "timeout" if subscribed else "unknown"}
+                if msg.get("id") == 2 and msg.get("type") == "result" and not msg.get("success"):
+                    return {"status": "error", "error": msg.get("error", {}).get("message", "mqtt.publish fehlgeschlagen")}
+                if msg.get("id") == 2 and msg.get("type") == "result" and not subscribed:
+                    return {"status": "unknown"}  # ohne Abo keine Antwort lesbar
+                if msg.get("id") == 1 and msg.get("type") == "event":
+                    try:
+                        data = json.loads(msg["event"]["payload"])
+                    except (KeyError, ValueError):
+                        continue
+                    if data.get("transaction") == txn:
+                        return data
+    except (ClientError, asyncio.TimeoutError, ValueError) as err:
+        raise web.HTTPBadGateway(text=f"Keine Verbindung zu Home Assistant ({WS_URL}): {err!r}")
+
+
+def z2m_failure(base, result):
+    """Menschenlesbare Fehlermeldung, wenn Zigbee2MQTT die Anfrage nicht ausgeführt hat (sonst None)."""
+    status = result.get("status")
+    if status == "ok" or status == "unknown":
+        return None
+    if status == "timeout":
+        return f"Keine Antwort von Zigbee2MQTT – stimmt der Basis-Topic „{base}“? Läuft Z2M?"
+    return f"Zigbee2MQTT: {result.get('error') or result}"
+
+
 async def permit_join(request):
     """Aktiviert/beendet das Anlernen (Pairing) am Zigbee2MQTT-Gateway oder bei ZHA."""
     body = await request.json()
@@ -150,9 +233,11 @@ async def permit_join(request):
     if body.get("source") == "zha":
         cmd = {"type": "call_service", "domain": "zha", "service": "permit", "service_data": {"duration": seconds}}
     else:
-        cmd = {"type": "call_service", "domain": "mqtt", "service": "publish", "service_data": {
-            "topic": f"{safe_topic(body.get('base_topic'))}/bridge/request/permit_join",
-            "payload": json.dumps({"time": seconds})}}
+        base = safe_topic(body.get("base_topic"))
+        failure = z2m_failure(base, await z2m_request(base, "permit_join", {"time": seconds}, timeout=8))
+        if failure:
+            raise web.HTTPBadGateway(text=failure)
+        return web.json_response({"ok": True, "time": seconds})
     await ha([cmd])
     return web.json_response({"ok": True, "time": seconds})
 
@@ -380,7 +465,7 @@ async def verify_changes(items, renamed, opts, wait=True):
         if not wrong or time.monotonic() >= deadline:
             break
         await asyncio.sleep(1.5)
-    if opts.get("skip_names"):
+    if opts.get("skip_names") or not items:
         pass
     elif not wrong:
         checks.append(check("Gerätenamen", "ok", f"{len(items)} Gerät(e) heißen jetzt wie geplant"))
@@ -477,6 +562,9 @@ async def apply(request):
         raise web.HTTPBadRequest(text="Keine Geräte angegeben")
     z2m_mode = bool(body.get("rename_entities"))
     errors, done = [], []
+    pid = body.get("progress_id")
+    prog_start(pid, len(items) * 2 + 4)
+    prog(pid, "Lese Entitäten …", 0)
     entities = (await ha([{"type": "config/entity_registry/list"}]))[0] if z2m_mode else []
     changes, skipped = entity_changes(items, entities) if z2m_mode else ([], [])
     targets = await resolve_areas(body, items)
@@ -486,18 +574,26 @@ async def apply(request):
         if tgt and tgt["id"]:
             it["area_id"] = tgt["id"]
 
-    for it in items:
+    failed_ids = set()
+    for n, it in enumerate(items, 1):
+        prog(pid, f"Benenne um ({n}/{len(items)}): {it['name']}", 0)
         if z2m_mode and it.get("source") == "z2m" and it.get("ieee"):
-            # In Zigbee2MQTT umbenennen; die HA-Entity-IDs ändern wir selbst, damit wir sie kennen
-            cmd = {"type": "call_service", "domain": "mqtt", "service": "publish", "service_data": {
-                "topic": f"{safe_topic(it.get('base_topic'))}/bridge/request/device/rename",
-                "payload": json.dumps({"from": it["ieee"], "to": it["name"]})}}
+            # In Zigbee2MQTT umbenennen und Z2Ms Antwort abwarten; die HA-Entity-IDs ändern wir selbst, damit wir sie kennen
+            base = safe_topic(it.get("base_topic"))
+            failure = z2m_failure(base, await z2m_request(base, "device/rename", {"from": it["ieee"], "to": it["name"]}))
+            ok, res = (failure is None), failure
+            cmd = {}
         else:
             cmd = {"type": "config/device_registry/update", "device_id": it["device_id"], "name_by_user": it["name"]}
             if targets.get(it["device_id"], {}).get("id"):
                 cmd["area_id"] = targets[it["device_id"]]["id"]
-        ok, res = await ha_try(cmd)
-        (done if ok else errors).append(it["device_id"] if ok else {"device": it["name"], "error": res})
+            ok, res = await ha_try(cmd)
+        if ok:
+            done.append(it["device_id"])
+        else:
+            failed_ids.add(it["device_id"])
+            errors.append({"device": it["name"], "device_id": it["device_id"], "error": res})
+        prog(pid, f"Benannt ({n}/{len(items)}): {it['name']}")
         tgt = targets.get(it["device_id"])
         if ok and tgt and tgt["id"] and "area_id" not in cmd:  # Z2M-Weg: Bereich separat setzen
             ok2, res2 = await ha_try({"type": "config/device_registry/update", "device_id": it["device_id"], "area_id": tgt["id"]})
@@ -505,13 +601,17 @@ async def apply(request):
                 errors.append({"device": f"Bereich für {it['name']}", "error": res2})
 
     renamed = []
+    ids_by_entity = {e["entity_id"]: e.get("device_id") for e in entities}
+    changes = [c for c in changes if ids_by_entity.get(c["old"]) not in failed_ids]  # nichts ändern, wenn Z2M nicht umbenannt hat
     for ch in changes:
+        prog(pid, f"Entity-ID: {ch['old']}")
         ok, res = await ha_try({"type": "config/entity_registry/update",
                                 "entity_id": ch["old"], "new_entity_id": ch["new"]})
         (renamed.append(ch) if ok else errors.append({"device": ch["old"], "error": res}))
 
     changed_refs, unreadable = [], 0
     notes = []
+    prog(pid, "Suche Verweise …", 0)
     if renamed and (body.get("update_references") or body.get("update_yaml") or body.get("update_nodered")):
         configs, unreadable = await scan_configs() if body.get("update_references") else ([], 0)
         if body.get("update_yaml") or body.get("update_nodered"):
@@ -556,7 +656,9 @@ async def apply(request):
                     changed_refs.append({"kind": it["kind"], "title": it["title"]})
                 else:
                     errors.append({"device": f"{it['kind']} {it['title']}", "error": res})
-    checks = await verify_changes(items, renamed, body) if not body.get("skip_verify") else []
+    prog(pid, "Prüfe das Ergebnis …", 0)
+    checks = await verify_changes([i for i in items if i["device_id"] not in failed_ids], renamed, body) if not body.get("skip_verify") else []
+    prog_end(pid)
     return web.json_response({"ok": not errors, "checks": checks, "renamed_devices": done, "renamed_entities": renamed,
                               "skipped": skipped, "updated_references": changed_refs,
                               "unreadable": unreadable, "notes": notes, "errors": errors,
@@ -620,6 +722,7 @@ def make_app():
         web.post("/api/plan", plan),
         web.post("/api/apply", apply),
         web.post("/api/verify", verify),
+        web.get("/api/progress", progress),
         web.post("/api/assign_area", assign_area),
     ])
     return app

@@ -196,7 +196,7 @@ const api = {
     if (!r.ok) throw new Error(await r.text());
   },
   payload(list, forceArea = false) {
-    return list.map(([d, name]) => ({device_id: d.id, name, old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || "zigbee2mqtt",
+    return list.map(([d, name]) => ({device_id: d.id, name, old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || "",
       ...((S.setArea || forceArea) && roomOf(d) ? {area_id: roomOf(d).area_id || "", area_name: roomOf(d).name, current_area_id: d.area_id || "", current_area: d.area || ""} : {})}));
   },
   opts() { const on = S.renameEntities; return {set_area: S.setArea, rename_entities: on, update_references: on && S.updateRefs, update_yaml: on && S.updateYaml, update_nodered: on && S.updateNodered}; },
@@ -218,18 +218,19 @@ const api = {
     }
     return this.post("api/plan", {items: this.payload(list), ...this.opts()});
   },
-  async apply(list) {
+  async apply(list, progressId) {
     if (this.demo) {
       try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); list.forEach(([d, name]) => n[d.id] = name); localStorage.setItem("zdm-demo-names", JSON.stringify(n)); } catch (e) {}
+      await new Promise(r => setTimeout(r, 2800));
       const res = {ok: true, errors: [], renamed_entities: [], updated_references: []};
       res.checks = this.demoChecks({items: list, opts: this.opts()});
       return res;
     }
-    return this.post("api/apply", {items: this.payload(list), ...this.opts()});
+    return this.post("api/apply", {items: this.payload(list), ...this.opts(), progress_id: progressId});
   },
   async permit(b, seconds) {
     if (this.demo) return;
-    await this.post("api/permit_join", {source: b.source, base_topic: S.gateways[b.id]?.topic || "zigbee2mqtt", time: seconds});
+    await this.post("api/permit_join", {source: b.source, base_topic: S.gateways[b.id]?.topic || "", time: seconds});
   },
   async permitState() {
     if (this.demo) return {};
@@ -485,6 +486,28 @@ function confirmPlan(plan, count, areaOnly = false) {
   });
 }
 
+/** Zeigt einen Fortschrittsbalken, solange fn(progressId) läuft; fragt den Server nach dem Stand. */
+async function runWithProgress(title, fn) {
+  const pid = uid("p");
+  const dlg = document.createElement("dialog");
+  dlg.style.cssText = "max-width:520px;width:92%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
+  dlg.innerHTML = `<h2 style="margin:0 0 12px;font-size:16px">${esc(title)}</h2>
+    <div style="height:10px;background:var(--chip);border-radius:999px;overflow:hidden"><div id="pbar" style="height:100%;width:3%;background:var(--accent);border-radius:999px;transition:width .35s"></div></div>
+    <p class="sub" id="plabel" style="margin:10px 0 0">Starte …</p><p class="sub" id="pperc" style="margin:2px 0 0"></p>`;
+  dlg.oncancel = e => e.preventDefault();
+  document.body.appendChild(dlg); dlg.showModal();
+  let demoStep = 0;
+  const set = (done, total, label) => { const pct = Math.max(3, Math.round(100 * done / total)); $("#pbar", dlg).style.width = pct + "%"; $("#plabel", dlg).textContent = label; $("#pperc", dlg).textContent = pct + " % – bitte warten, nicht schließen"; };
+  const timer = setInterval(async () => {
+    try {
+      if (api.demo) { demoStep = Math.min(demoStep + 1, 5); set(demoStep, 6, ["Lese Entitäten …", "Benenne um …", "Entity-IDs …", "Suche Verweise …", "Prüfe das Ergebnis …"][Math.min(demoStep - 1, 4)]); return; }
+      const j = await (await fetch("api/progress?id=" + pid)).json(); set(j.done, j.total, j.label);
+    } catch (e) { /* Fortschritt ist nur Anzeige */ }
+  }, 450);
+  try { return await fn(pid); }
+  finally { clearInterval(timer); set(1, 1, "Fertig"); dlg.close(); dlg.remove(); }
+}
+
 /** Bereich lokal nachziehen; neu angelegte Bereiche mit dem Raum verknüpfen. */
 function adoptAreas(items) {
   for (const it of items || []) {
@@ -542,13 +565,13 @@ async function applyBatch(items) {
         const plan = await api.plan(real);
         if ((S.renameEntities || plan.areas?.length) && !await confirmPlan(plan, real.length)) return 0;
       }
-      const res = await api.apply(real);
+      const res = await runWithProgress("Umbenennen läuft …", pid => api.apply(real, pid));
       adoptAreas(res.items);
-      for (const [d, name] of real) { const dev = S.devices.find(x => x.id === d.id); dev.name = name; dev.is_new = false; }
+      const failed = new Set((res.errors || []).map(e => e.device_id).filter(Boolean));
+      for (const [d, name] of real) { if (failed.has(d.id)) continue; const dev = S.devices.find(x => x.id === d.id); dev.name = name; dev.is_new = false; }
       if (res.errors?.length) toast("Fehler: " + res.errors.map(e => e.device + ": " + e.error).join("; "));
       await showChecks(res.checks || [], {items: res.items || api.payload(real), renamed: res.renamed_entities || [], opts: api.opts()}, res.errors || []);
     } catch (e) { toast("Fehler: " + e.message); return 0; }
-    for (const [d, name] of real) { const dev = S.devices.find(x => x.id === d.id); dev.name = name; dev.is_new = false; }
   }
   persist(); return items.length;
 }
