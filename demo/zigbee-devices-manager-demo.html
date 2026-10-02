@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zigbee Devices Manager</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--fg:#1d2330;--muted:#6b7385;--line:#e2e5ec;--accent:#0b7bd6;--accent-fg:#fff;--ok:#1a8f4c;--warn:#b86e00;--new:#c2410c;--chip:#eef2f8;--input:#fff}
+@media(prefers-color-scheme:dark){:root{--bg:#14171d;--card:#1c2028;--fg:#e6e9ef;--muted:#8d95a8;--line:#2d3340;--accent:#4aa3f0;--accent-fg:#06131f;--ok:#4cc27e;--warn:#e0a040;--new:#f08a4b;--chip:#262c38;--input:#14171d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 16px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+header h1{font-size:17px;margin:0;font-weight:600}
+nav{display:flex;gap:4px;margin-left:auto}
+nav button{background:none;border:0;color:var(--muted);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit}
+nav button.on{background:var(--chip);color:var(--fg);font-weight:600}
+main{padding:16px;max-width:1300px;margin:0 auto}
+.banner{background:var(--chip);border:1px solid var(--line);border-left:4px solid var(--warn);padding:8px 12px;border-radius:6px;margin-bottom:12px;color:var(--muted)}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+input,select,button{font:inherit;color:var(--fg)}
+input,select{background:var(--input);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0}
+input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+button.btn{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
+button.btn:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:600}
+button:disabled{opacity:.45;cursor:default}
+.chips{display:flex;gap:4px}
+.chips button{background:var(--chip);border:0;border-radius:999px;padding:4px 12px;cursor:pointer;color:var(--muted)}
+.chips button.on{background:var(--accent);color:var(--accent-fg)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:auto}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:12px;color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--card)}
+tr:last-child td{border-bottom:0}
+td.name{cursor:text;font-weight:600;min-width:180px}
+td.name:hover{text-decoration:underline dotted}
+td.name input{width:100%;font-weight:600}
+.sub{color:var(--muted);font-size:12px;font-weight:400}
+code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+.badge{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--chip);color:var(--muted)}
+.badge.new{background:color-mix(in srgb,var(--new) 18%,transparent);color:var(--new)}
+.badge.ok{color:var(--ok)}.badge.plan{color:var(--accent)}
+.sugg{color:var(--ok);font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace}
+.empty{padding:32px;text-align:center;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+.panel h2{margin:0 0 10px;font-size:15px}
+.row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.row label{min-width:110px;color:var(--muted)}
+.list .row input:first-child{flex:1}.list .row input.abbr{width:80px;flex:none;font-family:ui-monospace,monospace;text-transform:uppercase}
+.preview{background:var(--chip);border-radius:6px;padding:10px;font-family:ui-monospace,monospace;line-height:1.8}
+.tok{cursor:pointer;background:var(--chip);border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-family:ui-monospace,monospace;font-size:12px}
+.x{background:none;border:0;color:var(--muted);cursor:pointer;font-size:16px}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.show{opacity:1}
+@media(max-width:700px){.hide-s{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🐝 Zigbee Devices Manager</h1>
+  <nav>
+    <button data-tab="devices" class="on">Geräte</button>
+    <button data-tab="scheme">Namensschema</button>
+    <button data-tab="export">Export</button>
+  </nav>
+</header>
+<main>
+  <div id="banner"></div>
+  <section id="tab-devices"></section>
+  <section id="tab-scheme" hidden></section>
+  <section id="tab-export" hidden></section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>window.ZDM_DEMO = true;</script>
+<script>
+// ---------- Konfiguration / Standarddaten ----------
+const DEMO_FORCED = window.ZDM_DEMO === true;
+
+const DEFAULT_SCHEME = {
+  pattern: "{room}_{type}_{nr}",
+  case: "upper",
+  counter: {style: "arabic", pad: 2, start: 1},
+  rooms: [
+    {id: "r1", name: "Wohnzimmer", abbr: "WZ"}, {id: "r2", name: "Küche", abbr: "KU"},
+    {id: "r3", name: "Schlafzimmer", abbr: "SZ"}, {id: "r4", name: "Bad", abbr: "BD"},
+    {id: "r5", name: "Flur", abbr: "FL"}, {id: "r6", name: "Büro", abbr: "BU"},
+    {id: "r7", name: "Garten", abbr: "GA"}
+  ],
+  types: [
+    {id: "t1", name: "Lampe", abbr: "LP"}, {id: "t2", name: "Steckdose", abbr: "ST"},
+    {id: "t3", name: "Temperatursensor", abbr: "TS"}, {id: "t4", name: "Bewegungsmelder", abbr: "BM"},
+    {id: "t5", name: "Fenster-/Türkontakt", abbr: "FK"}, {id: "t6", name: "Taster", abbr: "TA"},
+    {id: "t7", name: "Rollo", abbr: "RO"}, {id: "t8", name: "Heizkörperthermostat", abbr: "HT"}
+  ]
+};
+
+const DEMO_DEVICES = [
+  ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0001", "Wohnzimmer", "Wohnzimmer Stehlampe"],
+  ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0002", "Wohnzimmer", null],
+  ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0003", "Wohnzimmer", null],
+  ["Hue white ambiance", "Signify Netherlands B.V.", "LTW013", "0x001788010a1b2c03", "Küche", null],
+  ["lumi.weather", "LUMI", "WSDCGQ11LM", "0x00158d0001a2b3c4", "Schlafzimmer", null],
+  ["lumi.weather", "LUMI", "WSDCGQ11LM", "0x00158d0001a2b3c5", "", null],
+  ["lumi.sensor_motion.aq2", "LUMI", "RTCGQ11LM", "0x00158d0002c4d5e6", "Flur", null],
+  ["lumi.sensor_magnet.aq2", "LUMI", "MCCGQ11LM", "0x00158d0003d5e6f7", "Bad", null],
+  ["lumi.sensor_magnet.aq2", "LUMI", "MCCGQ11LM", "0x00158d0003d5e6f8", "", null],
+  ["TS011F", "_TZ3000_g5xawfcq", "TS011F_plug_1", "0xa4c138aabbcc0001", "Büro", "Büro Steckdose Monitor"],
+  ["TS011F", "_TZ3000_g5xawfcq", "TS011F_plug_1", "0xa4c138aabbcc0002", "", null],
+  ["TRV001", "Eurotronic", "SPZB0001", "0x00124b0022ee0001", "Büro", null],
+  ["TRADFRI remote control", "IKEA of Sweden", "E1524", "0x680ae2fffe1a0010", "Wohnzimmer", null],
+  ["Zigbee Coordinator", "Texas Instruments", "CC2652P", "0x00124b0030aa0000", "", "Koordinator"]
+].map((d, i) => ({id: "demo" + i, orig_name: d[0], manufacturer: d[1], model: d[2], ieee: d[3], area: d[4],
+  is_new: !d[5], name: d[5] || d[3]}));
+
+// ---------- Hilfsfunktionen ----------
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const uid = p => p + Math.random().toString(36).slice(2, 8);
+const clone = o => JSON.parse(JSON.stringify(o));
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2400);
+}
+function download(name, text, type) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type})); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------- Namens-Generator ----------
+function toRoman(n) {
+  const m = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+  let r = ""; for (const [v, s] of m) while (n >= v) { r += s; n -= v; } return r;
+}
+function toAlpha(n) { let r = ""; while (n > 0) { n--; r = String.fromCharCode(65 + n % 26) + r; n = Math.floor(n / 26); } return r; }
+function fmtNr(n, c) {
+  if (c.style === "roman") return toRoman(n);
+  if (c.style === "alpha") return toAlpha(n);
+  return String(n).padStart(c.pad, "0");
+}
+function applyCase(s, mode) { return mode === "upper" ? s.toUpperCase() : mode === "lower" ? s.toLowerCase() : s; }
+function buildName(scheme, room, type, n) {
+  const s = scheme.pattern
+    .replaceAll("{room}", room?.abbr ?? "").replaceAll("{type}", type?.abbr ?? "")
+    .replaceAll("{nr}", fmtNr(n, scheme.counter));
+  return applyCase(s, scheme.case);
+}
+/** Nächste freie Nummer für Raum+Typ, berücksichtigt bereits belegte Namen. */
+function nextName(scheme, room, type, used) {
+  for (let n = scheme.counter.start; n < 10000; n++) {
+    const name = buildName(scheme, room, type, n);
+    if (!used.has(name.toLowerCase())) return name;
+  }
+}
+
+// ---------- API (Add-on oder Demo) ----------
+const api = {
+  demo: DEMO_FORCED,
+  async load() {
+    if (!this.demo) {
+      try {
+        const r = await fetch("api/state");
+        if (!r.ok) throw new Error(r.status);
+        return await r.json();
+      } catch (e) { this.demo = true; }
+    }
+    let store = {};
+    try { store = JSON.parse(localStorage.getItem("zdm-demo-store") || "{}"); } catch (e) {}
+    let devices = clone(DEMO_DEVICES);
+    try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); devices.forEach(d => { if (n[d.id]) { d.name = n[d.id]; d.is_new = false; } }); } catch (e) {}
+    return {devices, store};
+  },
+  async saveStore(store) {
+    if (this.demo) { try { localStorage.setItem("zdm-demo-store", JSON.stringify(store)); } catch (e) {} return; }
+    const r = await fetch("api/store", {method: "PUT", body: JSON.stringify(store)});
+    if (!r.ok) throw new Error(await r.text());
+  },
+  async rename(d, name, renameEntities) {
+    if (this.demo) {
+      try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); n[d.id] = name; localStorage.setItem("zdm-demo-names", JSON.stringify(n)); } catch (e) {}
+      return;
+    }
+    const r = await fetch("api/rename", {method: "POST", body: JSON.stringify({device_id: d.id, name, old_name: d.name, rename_entities: renameEntities})});
+    if (!r.ok) throw new Error(await r.text());
+  }
+};
+
+// ---------- State ----------
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), editing: null, renameEntities: false};
+
+function persist() {
+  clearTimeout(persist.t);
+  persist.t = setTimeout(() => api.saveStore({scheme: S.scheme, meta: S.meta, planned: S.planned}).catch(e => toast("Speichern fehlgeschlagen: " + e.message)), 300);
+}
+const allRows = () => [...S.devices, ...S.planned.map(p => ({id: p.id, name: p.name, orig_name: "", manufacturer: "", model: "", ieee: "", area: "", is_new: false, planned: true}))];
+const roomOf = d => { const id = S.meta[d.id]?.room; return S.scheme.rooms.find(r => r.id === id) || S.scheme.rooms.find(r => d.area && r.name.toLowerCase() === d.area.toLowerCase()); };
+const typeOf = d => S.scheme.types.find(t => t.id === S.meta[d.id]?.type);
+
+/** Berechnet Namensvorschläge für alle Zeilen mit Raum+Typ, die noch nicht dem Schema entsprechen. */
+function suggestions() {
+  const rows = allRows(), out = new Map();
+  const pending = rows.filter(d => typeOf(d) && (!S.scheme.pattern.includes("{room}") || roomOf(d)));
+  const pendIds = new Set(pending.map(d => d.id));
+  const used = new Set(rows.filter(d => !pendIds.has(d.id)).map(d => d.name.toLowerCase()));
+  for (const d of pending) {
+    const room = roomOf(d), type = typeOf(d);
+    const name = nextName(S.scheme, room, type, used);
+    used.add(name.toLowerCase());
+    out.set(d.id, name);
+  }
+  return out;
+}
+
+// ---------- Geräte-Tab ----------
+function renderDevices() {
+  const sug = suggestions(), q = S.q.toLowerCase();
+  let rows = allRows().filter(d => {
+    if (S.filter === "new" && !d.is_new) return false;
+    if (S.filter === "named" && (d.is_new || d.planned)) return false;
+    if (S.filter === "planned" && !d.planned) return false;
+    return !q || [d.name, d.orig_name, d.ieee, d.model, d.manufacturer, d.area].join(" ").toLowerCase().includes(q);
+  });
+  const roomOpts = sel => `<option value="">–</option>` + S.scheme.rooms.map(r => `<option value="${r.id}"${r.id === sel ? " selected" : ""}>${esc(r.abbr)} · ${esc(r.name)}</option>`).join("");
+  const typeOpts = sel => `<option value="">–</option>` + S.scheme.types.map(t => `<option value="${t.id}"${t.id === sel ? " selected" : ""}>${esc(t.abbr)} · ${esc(t.name)}</option>`).join("");
+  const counts = {all: allRows().length, new: allRows().filter(d => d.is_new).length};
+  const applicable = rows.filter(d => sug.has(d.id) && sug.get(d.id) !== d.name);
+
+  $("#tab-devices").innerHTML = `
+    <div class="bar">
+      <input id="q" type="search" placeholder="Suchen (Name, IEEE, Modell, Raum)…" value="${esc(S.q)}" style="width:280px">
+      <div class="chips">${[["all", "Alle"], ["new", "Neu (" + counts.new + ")"], ["named", "Benannt"], ["planned", "Geplant"]].map(([k, l]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}">${l}</button>`).join("")}</div>
+      <span style="flex:1"></span>
+      <button class="btn" id="addPlanned">＋ Neues Gerät planen</button>
+    </div>
+    <div class="bar">
+      <span class="sub">${S.sel.size} ausgewählt</span>
+      <select id="bRoom">${roomOpts("")}</select>
+      <select id="bType">${typeOpts("")}</select>
+      <button class="btn" id="bAssign" ${S.sel.size ? "" : "disabled"}>Raum/Typ zuweisen</button>
+      <span style="flex:1"></span>
+      <label class="sub" title="Benennt auch die zugehörigen Entitäten (entity_id) um, sofern sie den alten Gerätenamen enthalten"><input type="checkbox" id="rEnt" ${S.renameEntities ? "checked" : ""}> Entitäts-IDs mitziehen</label>
+      <button class="btn primary" id="applyAll" ${applicable.length ? "" : "disabled"}>${applicable.length} Vorschläge übernehmen</button>
+    </div>
+    <div class="card"><table>
+      <thead><tr><th><input type="checkbox" id="selAll" ${rows.length && rows.every(d => S.sel.has(d.id)) ? "checked" : ""}></th>
+        <th>Name</th><th>Neuer Vorschlag</th><th>Raum</th><th>Typ</th><th class="hide-s">Gerät</th><th class="hide-s">IEEE</th><th>Status</th><th></th></tr></thead>
+      <tbody>${rows.map(d => {
+        const s = sug.get(d.id), r = roomOf(d), t = typeOf(d);
+        const nameCell = S.editing === d.id
+          ? `<input id="edit" value="${esc(d.name)}">`
+          : esc(d.name) + (d.area ? `<div class="sub">HA-Bereich: ${esc(d.area)}</div>` : "");
+        return `<tr data-id="${d.id}">
+          <td><input type="checkbox" class="sel" ${S.sel.has(d.id) ? "checked" : ""}></td>
+          <td class="name" title="Klicken zum Bearbeiten">${nameCell}</td>
+          <td>${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}</td>
+          <td><select class="room">${roomOpts(r?.id)}</select></td>
+          <td><select class="type">${typeOpts(t?.id)}</select></td>
+          <td class="hide-s">${esc(d.manufacturer)}<div class="sub">${esc(d.model || d.orig_name)}</div></td>
+          <td class="hide-s"><code>${esc(d.ieee || "–")}</code></td>
+          <td><span class="badge ${d.planned ? "plan" : d.is_new ? "new" : "ok"}">${d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}</span></td>
+          <td>${s && s !== d.name ? `<button class="btn apply">Übernehmen</button>` : ""}${d.planned ? `<button class="x delP" title="Entfernen">✕</button>` : ""}</td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="9" class="empty">Keine Geräte gefunden.</td></tr>`}</tbody>
+    </table></div>`;
+
+  const root = $("#tab-devices");
+  $("#q", root).oninput = e => { S.q = e.target.value; const p = e.target.selectionStart; renderDevices(); const i = $("#q"); i.focus(); i.setSelectionRange(p, p); };
+  root.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { S.filter = b.dataset.f; renderDevices(); });
+  $("#rEnt", root).onchange = e => S.renameEntities = e.target.checked;
+  $("#selAll", root).onchange = e => { rows.forEach(d => e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id)); renderDevices(); };
+  $("#addPlanned", root).onclick = () => {
+    const name = prompt("Name des geplanten Geräts (wird reserviert, damit die Nummer nicht doppelt vergeben wird):");
+    if (name?.trim()) { S.planned.push({id: uid("p_"), name: name.trim()}); persist(); renderDevices(); }
+  };
+  $("#bAssign", root).onclick = () => {
+    const room = $("#bRoom", root).value, type = $("#bType", root).value;
+    S.sel.forEach(id => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type})}; });
+    persist(); renderDevices();
+  };
+  $("#applyAll", root).onclick = async () => {
+    let n = 0; for (const d of applicable) { if (await applyName(d, sug.get(d.id))) n++; }
+    toast(n + " Namen übernommen"); renderDevices();
+  };
+  root.querySelectorAll("tbody tr[data-id]").forEach(tr => {
+    const d = rows.find(x => x.id === tr.dataset.id);
+    $(".sel", tr).onchange = e => { e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id); renderDevices(); };
+    $(".room", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], room: e.target.value}; persist(); renderDevices(); };
+    $(".type", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], type: e.target.value}; persist(); renderDevices(); };
+    $(".apply", tr) && ($(".apply", tr).onclick = async () => { if (await applyName(d, sug.get(d.id))) toast("Name übernommen"); renderDevices(); });
+    $(".delP", tr) && ($(".delP", tr).onclick = () => { S.planned = S.planned.filter(p => p.id !== d.id); persist(); renderDevices(); });
+    $(".name", tr).onclick = () => { if (S.editing !== d.id) { S.editing = d.id; renderDevices(); const i = $("#edit"); i.focus(); i.select(); } };
+  });
+  const edit = $("#edit");
+  if (edit) {
+    const done = async save => {
+      const id = S.editing; S.editing = null;
+      const d = allRows().find(x => x.id === id), v = edit.value.trim();
+      if (save && v && v !== d.name) await applyName(d, v);
+      renderDevices();
+    };
+    edit.onkeydown = e => { if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); };
+    edit.onblur = () => S.editing && done(true);
+    edit.onclick = e => e.stopPropagation();
+  }
+}
+
+async function applyName(d, name) {
+  if (d.planned) { const p = S.planned.find(x => x.id === d.id); p.name = name; }
+  else {
+    try { await api.rename(d, name, S.renameEntities); }
+    catch (e) { toast("Fehler: " + e.message); return false; }
+    const dev = S.devices.find(x => x.id === d.id); dev.name = name; dev.is_new = false;
+  }
+  persist(); return true;
+}
+
+// ---------- Schema-Tab ----------
+function renderScheme() {
+  const sc = S.scheme, c = sc.counter, r0 = sc.rooms[0], t0 = sc.types[0], r1 = sc.rooms[1] || r0;
+  const used = new Set(), ex = [];
+  for (const [r, t] of [[r0, t0], [r0, t0], [r0, t0], [r1, t0], [r0, sc.types[1] || t0]]) { const n = nextName(sc, r, t, used); used.add(n.toLowerCase()); ex.push(n); }
+  const list = (kind, items) => items.map(i => `<div class="row" data-id="${i.id}">
+      <input data-k="name" value="${esc(i.name)}" placeholder="Name"><input class="abbr" data-k="abbr" value="${esc(i.abbr)}" placeholder="Kürzel" maxlength="8">
+      <button class="x" data-del="${kind}" title="Entfernen">✕</button></div>`).join("");
+  $("#tab-scheme").innerHTML = `<div class="grid">
+    <div class="panel"><h2>Muster</h2>
+      <div class="row"><label>Muster</label><input id="pat" value="${esc(sc.pattern)}" style="flex:1"></div>
+      <div class="row"><label></label>${["{room}", "{type}", "{nr}"].map(t => `<button class="tok" data-tok="${t}">${t}</button>`).join("")}<span class="sub">Trenner (_ - . Leerzeichen) frei wählbar</span></div>
+      <div class="row"><label>Schreibweise</label><select id="case"><option value="upper">GROSS</option><option value="lower">klein</option><option value="keep">wie eingegeben</option></select></div>
+      <div class="row"><label>Zähler</label><select id="cst"><option value="arabic">1, 2, 3</option><option value="roman">I, II, III</option><option value="alpha">A, B, C</option></select>
+        <input id="cpad" type="number" min="1" max="6" value="${c.pad}" style="width:64px" title="Stellen (nur 1,2,3)" ${c.style === "arabic" ? "" : "disabled"}>
+        <span class="sub">Stellen</span><input id="cstart" type="number" min="0" max="999" value="${c.start}" style="width:64px"><span class="sub">Start</span></div>
+      <h2 style="margin-top:16px">Vorschau</h2><div class="preview">${ex.map(esc).join("<br>")}</div>
+      <p class="sub">Der Zähler zählt je Raum+Typ automatisch hoch und überspringt bereits vergebene Namen.</p>
+    </div>
+    <div class="panel list"><h2>Räume</h2>${list("rooms", sc.rooms)}<button class="btn" data-add="rooms">＋ Raum</button></div>
+    <div class="panel list"><h2>Gerätetypen</h2>${list("types", sc.types)}<button class="btn" data-add="types">＋ Typ</button></div>
+  </div>`;
+  const root = $("#tab-scheme");
+  $("#case", root).value = sc.case; $("#cst", root).value = c.style;
+  const upd = () => { persist(); renderScheme(); };
+  $("#pat", root).onchange = e => { sc.pattern = e.target.value; upd(); };
+  root.querySelectorAll("[data-tok]").forEach(b => b.onclick = () => { sc.pattern += b.dataset.tok; upd(); });
+  $("#case", root).onchange = e => { sc.case = e.target.value; upd(); };
+  $("#cst", root).onchange = e => { c.style = e.target.value; upd(); };
+  $("#cpad", root).onchange = e => { c.pad = Math.max(1, +e.target.value || 1); upd(); };
+  $("#cstart", root).onchange = e => { c.start = Math.max(0, +e.target.value || 0); upd(); };
+  root.querySelectorAll(".list .row").forEach(row => {
+    const kind = row.parentElement.querySelector("[data-add]").dataset.add, item = sc[kind].find(i => i.id === row.dataset.id);
+    row.querySelectorAll("input").forEach(inp => inp.onchange = () => { item[inp.dataset.k] = inp.dataset.k === "abbr" ? inp.value.trim().toUpperCase() : inp.value.trim(); upd(); });
+    row.querySelector("[data-del]").onclick = () => { sc[kind] = sc[kind].filter(i => i !== item); upd(); };
+  });
+  root.querySelectorAll("[data-add]").forEach(b => b.onclick = () => { sc[b.dataset.add].push({id: uid("x"), name: "Neu", abbr: "NE"}); upd(); });
+}
+
+// ---------- Export-Tab ----------
+function renderExport() {
+  $("#tab-export").innerHTML = `<div class="grid">
+    <div class="panel"><h2>Geräteliste</h2><p class="sub">Alle Geräte mit aktuellem Namen, Raum, Typ und IEEE.</p>
+      <button class="btn primary" id="csv">CSV herunterladen</button> <button class="btn" id="json">JSON herunterladen</button></div>
+    <div class="panel"><h2>Namensschema</h2><p class="sub">Schema (Muster, Räume, Typen) sichern oder auf einer anderen Instanz laden.</p>
+      <button class="btn" id="sExp">Schema exportieren</button> <button class="btn" id="sImp">Schema importieren…</button>
+      <input type="file" id="sFile" accept="application/json" hidden></div>
+  </div>`;
+  const rows = () => allRows().map(d => ({name: d.name, ieee: d.ieee, hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area, raum: roomOf(d)?.name || "", typ: typeOf(d)?.name || "", status: d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}));
+  $("#csv").onclick = () => {
+    const r = rows(), h = Object.keys(r[0] || {name: ""});
+    download("zigbee-geraete.csv", [h, ...r.map(o => h.map(k => o[k]))].map(l => l.map(v => `"${String(v).replaceAll('"', '""')}"`).join(";")).join("\n"), "text/csv");
+  };
+  $("#json").onclick = () => download("zigbee-geraete.json", JSON.stringify(rows(), null, 2), "application/json");
+  $("#sExp").onclick = () => download("namensschema.json", JSON.stringify(S.scheme, null, 2), "application/json");
+  $("#sImp").onclick = () => $("#sFile").click();
+  $("#sFile").onchange = async e => {
+    try {
+      const s = JSON.parse(await e.target.files[0].text());
+      if (!s.pattern || !Array.isArray(s.rooms) || !Array.isArray(s.types) || !s.counter) throw new Error("Ungültiges Schema");
+      S.scheme = s; persist(); toast("Schema importiert");
+    } catch (err) { toast("Import fehlgeschlagen: " + err.message); }
+  };
+}
+
+// ---------- Start ----------
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll("main section").forEach(s => s.hidden = s.id !== "tab-" + b.dataset.tab);
+  ({devices: renderDevices, scheme: renderScheme, export: renderExport})[b.dataset.tab]();
+});
+
+(async () => {
+  const data = await api.load();
+  S.devices = data.devices;
+  const st = data.store || {};
+  if (st.scheme?.pattern) S.scheme = st.scheme;
+  S.meta = st.meta || {}; S.planned = st.planned || [];
+  if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee-Geräte geladen und umbenannt.</div>`;
+  renderDevices();
+})();
+</script>
+</body>
+</html>
