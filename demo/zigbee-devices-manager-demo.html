@@ -199,7 +199,7 @@ const api = {
     return list.map(([d, name]) => ({device_id: d.id, name, old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || "",
       ...((S.setArea || forceArea) && roomOf(d) ? {area_id: roomOf(d).area_id || "", area_name: roomOf(d).name, current_area_id: d.area_id || "", current_area: d.area || ""} : {})}));
   },
-  opts() { const on = S.renameEntities; return {set_area: S.setArea, rename_entities: on, update_references: on && S.updateRefs, update_yaml: on && S.updateYaml, update_nodered: on && S.updateNodered}; },
+  opts() { const on = S.renameEntities; return {set_area: S.setArea, rename_z2m: S.renameZ2m, rename_entities: on, update_references: on && S.updateRefs, update_yaml: on && S.updateYaml, update_nodered: on && S.updateNodered}; },
   async post(path, body) {
     const r = await fetch(path, {method: "POST", body: JSON.stringify(body)});
     if (!r.ok) throw new Error(await r.text());
@@ -265,7 +265,7 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameEntities: false, setArea: true, updateRefs: true, updateYaml: false, updateNodered: false};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameZ2m: false, renameEntities: false, setArea: true, updateRefs: false, updateYaml: false, updateNodered: false};
 
 function persist() {
   clearTimeout(persist.t);
@@ -422,10 +422,11 @@ function renderDevices() {
       <button class="btn" id="bArea" ${S.sel.size ? "" : "disabled"} title="Ordnet die ausgewählten Geräte ihrem gewählten Raum in Home Assistant zu – ohne sie umzubenennen">Raum in HA setzen</button>
       <span style="flex:1"></span>
       <label class="sub" title="Ordnet das Gerät in Home Assistant dem gewählten Raum (Bereich) zu; fehlende Bereiche werden angelegt"><input type="checkbox" id="rArea" ${S.setArea ? "checked" : ""}> Raum als Bereich in HA setzen</label>
-      <label class="sub" title="Zigbee2MQTT-Geräte werden direkt in Z2M umbenannt. Entity-IDs, die den alten Namen enthalten, werden angepasst."><input type="checkbox" id="rEnt" ${S.renameEntities ? "checked" : ""}> Entity-IDs mitziehen (Z2M: dort umbenennen)</label>
-      <label class="sub" title="Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards (mit Sicherung)"><input type="checkbox" id="rRef" ${S.updateRefs ? "checked" : ""} ${S.renameEntities ? "" : "disabled"}> Verweise in Automationen/Dashboards anpassen</label>
-      <label class="sub" title="Ersetzt die alten Entity-IDs in allen YAML-Dateien unter /config (Packages, configuration.yaml, …). Danach Konfiguration prüfen und neu laden."><input type="checkbox" id="rYaml" ${S.updateYaml ? "checked" : ""} ${S.renameEntities ? "" : "disabled"}> YAML-Dateien anpassen</label>
-      <label class="sub" title="Ersetzt die alten Entity-IDs in den Node-RED-Flows. Node-RED danach neu starten, sonst überschreibt ein Deploy die Änderung."><input type="checkbox" id="rNode" ${S.updateNodered ? "checked" : ""} ${S.renameEntities ? "" : "disabled"}> Node-RED-Flows anpassen</label>
+      <label class="sub" title="Benennt Zigbee2MQTT-Geräte direkt in Z2M um (Friendly-Name und MQTT-Topic), nicht nur in Home Assistant. Z2M bestätigt die Umbenennung."><input type="checkbox" id="rZ2m" ${S.renameZ2m ? "checked" : ""}> In Zigbee2MQTT umbenennen</label>
+      <label class="sub" title="Passt die Entity-IDs (z. B. light.alt_name → light.neu_name) in Home Assistant an"><input type="checkbox" id="rEnt" ${S.renameEntities ? "checked" : ""}> Entity-IDs in HA anpassen</label>
+      <label class="sub" title="Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards (mit Sicherung). Setzt den Haken bei „Entity-IDs“ automatisch mit."><input type="checkbox" id="rRef" ${S.updateRefs && S.renameEntities ? "checked" : ""}> Verweise in Automationen/Dashboards anpassen</label>
+      <label class="sub" title="Ersetzt die alten Entity-IDs in allen YAML-Dateien unter /config (Packages, configuration.yaml, …). Danach Konfiguration prüfen und neu laden. Setzt den Haken bei „Entity-IDs“ automatisch mit."><input type="checkbox" id="rYaml" ${S.updateYaml && S.renameEntities ? "checked" : ""}> YAML-Dateien anpassen</label>
+      <label class="sub" title="Ersetzt die alten Entity-IDs in den Node-RED-Flows. Node-RED danach neu starten. Setzt den Haken bei „Entity-IDs“ automatisch mit."><input type="checkbox" id="rNode" ${S.updateNodered && S.renameEntities ? "checked" : ""}> Node-RED-Flows anpassen</label>
       <button class="btn primary" id="applyAll" ${applicable.length ? "" : "disabled"}>${applicable.length} ${S.sel.size ? "ausgewählte " : ""}Vorschläge übernehmen</button>
     </div>
     <div class="card"><table>
@@ -460,10 +461,11 @@ function renderDevices() {
   $("#floorOn", root) && ($("#floorOn", root).onclick = () => { S.scheme.pattern = "{floor}-" + S.scheme.pattern; S.scheme.case = "keep"; persist(); toast("Muster: " + S.scheme.pattern); renderDevices(); });
   $("#houseOn", root) && ($("#houseOn", root).onclick = () => { S.scheme.pattern = "{house}-" + S.scheme.pattern; S.scheme.case = "keep"; persist(); toast("Muster: " + S.scheme.pattern); renderDevices(); });
   $("#rArea", root).onchange = e => { S.setArea = e.target.checked; };
-  $("#rEnt", root).onchange = e => { S.renameEntities = e.target.checked; renderDevices(); };
-  $("#rRef", root).onchange = e => S.updateRefs = e.target.checked;
-  $("#rYaml", root).onchange = e => S.updateYaml = e.target.checked;
-  $("#rNode", root).onchange = e => S.updateNodered = e.target.checked;
+  $("#rZ2m", root).onchange = e => { S.renameZ2m = e.target.checked; };
+  // Die Haken sind einzeln anklickbar; Verweise brauchen geänderte Entity-IDs und setzen den Entity-Haken deshalb mit
+  $("#rEnt", root).onchange = e => { S.renameEntities = e.target.checked; if (!e.target.checked) S.updateRefs = S.updateYaml = S.updateNodered = false; renderDevices(); };
+  for (const [id, key] of [["#rRef", "updateRefs"], ["#rYaml", "updateYaml"], ["#rNode", "updateNodered"]])
+    $(id, root).onchange = e => { S[key] = e.target.checked; if (e.target.checked) S.renameEntities = true; renderDevices(); };
   $("#selAll", root).onchange = e => { rows.forEach(d => e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id)); renderDevices(); };
   $("#fromNames", root).onclick = () => {
     const r = syncFromNames(true);
