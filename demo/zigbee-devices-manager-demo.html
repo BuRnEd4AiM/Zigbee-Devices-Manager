@@ -166,11 +166,14 @@ const api = {
   demo: DEMO_FORCED,
   async load() {
     if (!this.demo) {
-      try {
-        const r = await fetch("api/state");
-        if (!r.ok) throw new Error(r.status);
-        return await r.json();
-      } catch (e) { this.demo = true; }
+      let r;
+      try { r = await fetch("api/state"); }
+      catch (e) { this.demo = true; }            // z. B. Datei lokal geöffnet: Demo
+      if (r && r.status === 404) this.demo = true; // statischer Host ohne Add-on-Server: Demo
+      else if (r) {
+        if (!r.ok) { this.error = `HTTP ${r.status}: ${(await r.text()).slice(0, 400)}`; return {devices: [], store: {}, bridges: []}; }
+        try { return await r.json(); } catch (e) { this.error = "Unerwartete Antwort vom Add-on-Server: " + e.message; return {devices: [], store: {}, bridges: []}; }
+      }
     }
     let store = {};
     try { store = JSON.parse(localStorage.getItem("zdm-demo-store") || "{}"); } catch (e) {}
@@ -566,7 +569,8 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   S.gateways = st.gateways || {};
   if (st.scheme?.pattern) S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, ...st.scheme};
   S.meta = st.meta || {}; S.planned = st.planned || [];
-  if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee-Geräte geladen und umbenannt.</div>`;
+  if (api.error) $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--new)"><b>Verbindung zu Home Assistant fehlgeschlagen.</b> Das Add-on läuft, kann aber keine Geräte laden – keine Demo-Daten.<br><code>${esc(api.error)}</code><br><button class="btn" style="margin-top:8px" onclick="location.reload()">Erneut versuchen</button> <a href="api/diag" target="_blank">Diagnose öffnen</a> <span class="sub">(Details auch im Add-on-Log)</span></div>`;
+  else if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee-Geräte geladen und umbenannt.</div>`;
   renderDevices();
 })();
 </script>
