@@ -16,6 +16,12 @@ panel_icon: mdi:zigbee
 panel_title: Zigbee Namen
 panel_admin: true
 homeassistant_api: true
+map:
+  - type: homeassistant_config
+    read_only: false
+    path: /homeassistant
+  - type: all_addon_configs
+    read_only: false
 options:
   z2m_base_topic: zigbee2mqtt
 schema:
