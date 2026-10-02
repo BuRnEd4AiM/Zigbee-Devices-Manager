@@ -1,6 +1,6 @@
 # Zigbee Devices Manager
 
-[![Demo herunterladen](https://img.shields.io/badge/%E2%AC%87%EF%B8%8F-Demo%20herunterladen-0b7bd6?style=for-the-badge)](https://raw.githubusercontent.com/BuRnEd4AiM/Zigbee-Devices-Manager/main/demo/zigbee-devices-manager-demo.html)
+[![Demo herunterladen](https://img.shields.io/badge/%E2%AC%87%EF%B8%8F-Demo%20herunterladen-0b7bd6?style=for-the-badge)](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases/download/demo/zigbee-devices-manager-demo.html)
 
 English version: [README.en.md](README.en.md)
 
@@ -28,7 +28,7 @@ Einstellungen → Add-ons → Add-on-Store → ⋮ → Repositories →
 
 ## Demo
 
-**[⬇️ Demo herunterladen](https://raw.githubusercontent.com/BuRnEd4AiM/Zigbee-Devices-Manager/main/demo/zigbee-devices-manager-demo.html)** (Rechtsklick → „Link speichern unter…“, dann im Browser öffnen) · [Ansicht auf GitHub](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/blob/main/demo/zigbee-devices-manager-demo.html)
+**[⬇️ Demo herunterladen](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases/download/demo/zigbee-devices-manager-demo.html)** (startet direkt den Download, danach im Browser öffnen) · [Ansicht auf GitHub](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/blob/main/demo/zigbee-devices-manager-demo.html)
 
 `demo/zigbee-devices-manager-demo.html` ist eine eigenständige Datei (ohne Backend) – einfach
 herunterladen und im Browser öffnen. Neu erzeugen mit `python3 scripts/build_demo.py`
@@ -36,8 +36,12 @@ herunterladen und im Browser öffnen. Neu erzeugen mit `python3 scripts/build_de
 
 ## Hinweise
 
-- Umbenannt wird in der Home-Assistant-Geräte-Registry (`name_by_user`). Bei Zigbee2MQTT bleibt der
-  Friendly-Name in Z2M unverändert.
+- Standard: Umbenennen in der Home-Assistant-Geräte-Registry (`name_by_user`).
+- **Zigbee2MQTT:** Mit „Entitäts-IDs mitziehen / in Z2M umbenennen“ wird das Gerät direkt in Z2M umbenannt
+  (Friendly-Name, MQTT-Topic und HA-Entity-IDs, per `mqtt.publish` an `<base_topic>/bridge/request/device/rename`).
+  Den Basis-Topic stellst du in den Add-on-Optionen ein (`z2m_base_topic`, Standard `zigbee2mqtt`). Das Ergebnis
+  wird nicht zurückgemeldet; prüfe es bei den ersten Geräten in Z2M.
+- Automationen/Dashboards mit alten Entity-IDs werden nicht angepasst.
 - Echtes Anlernen neuer Geräte passiert weiterhin in ZHA/Z2M; neue Geräte erscheinen hier automatisch als „neu“.
 - Schema und Zuweisungen liegen in `/data/store.json` des Add-ons.
 

@@ -14,6 +14,13 @@ WS_URL = os.environ.get("HA_WS_URL", "ws://supervisor/core/websocket")
 STORE_FILE = DATA / "store.json"
 
 
+def z2m_base_topic():
+    try:
+        return json.loads((DATA / "options.json").read_text()).get("z2m_base_topic") or "zigbee2mqtt"
+    except (OSError, ValueError):
+        return "zigbee2mqtt"
+
+
 async def ha(commands):
     """Führt Websocket-Kommandos gegen Home Assistant aus und liefert die Ergebnisse."""
     if not TOKEN:
@@ -42,13 +49,13 @@ def slugify(text):
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 
-def zigbee_ieee(device):
-    """Gibt die IEEE-Adresse zurück, wenn es ein ZHA- oder Zigbee2MQTT-Gerät ist."""
+def zigbee_source(device):
+    """Liefert (Quelle, IEEE) für ZHA- oder Zigbee2MQTT-Geräte, sonst None."""
     for domain, ident in device.get("identifiers", []):
         if domain == "zha":
-            return ident
+            return "zha", ident
         if domain == "mqtt" and ident.startswith("zigbee2mqtt_"):
-            return ident.removeprefix("zigbee2mqtt_")
+            return "z2m", ident.removeprefix("zigbee2mqtt_")
     return None
 
 
@@ -67,9 +74,10 @@ async def get_state(request):
     area_names = {a["area_id"]: a["name"] for a in areas}
     out = []
     for d in devices:
-        ieee = zigbee_ieee(d)
-        if not ieee:
+        found = zigbee_source(d)
+        if not found:
             continue
+        source, ieee = found
         out.append({
             "id": d["id"],
             "name": d.get("name_by_user") or d.get("name") or ieee,
@@ -78,6 +86,7 @@ async def get_state(request):
             "manufacturer": d.get("manufacturer") or "",
             "model": d.get("model") or "",
             "ieee": ieee,
+            "source": source,
             "area": area_names.get(d.get("area_id"), ""),
         })
     return web.json_response({"devices": out, "store": load_store()})
@@ -94,6 +103,16 @@ async def rename(request):
     device_id, name = body["device_id"], body["name"].strip()
     if not name:
         raise web.HTTPBadRequest(text="Name darf nicht leer sein")
+    if body.get("rename_entities") and body.get("source") == "z2m" and body.get("ieee"):
+        # Zigbee2MQTT benennt das Gerät um und passt per MQTT-Discovery die HA-Entity-IDs an
+        await ha([{
+            "type": "call_service", "domain": "mqtt", "service": "publish",
+            "service_data": {
+                "topic": f"{z2m_base_topic()}/bridge/request/device/rename",
+                "payload": json.dumps({"from": body["ieee"], "to": name, "homeassistant_rename": True}),
+            },
+        }])
+        return web.json_response({"ok": True, "via": "zigbee2mqtt"})
     commands = [{"type": "config/device_registry/update", "device_id": device_id, "name_by_user": name}]
     renamed = []
     if body.get("rename_entities") and body.get("old_name"):
