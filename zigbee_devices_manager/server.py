@@ -198,6 +198,26 @@ async def mqtt_collect(filters, seconds=2.5):
     return out
 
 
+async def z2m_devices():
+    """IEEE (klein) → {base, name} aus den zurückgehaltenen Nachrichten <base>/bridge/devices aller Z2M-Instanzen."""
+    out = {}
+    try:
+        messages = await mqtt_collect(["+/bridge/devices", "+/+/bridge/devices"], 2.5)
+    except web.HTTPException:
+        return out
+    for topic, payload in messages:
+        base = topic.removesuffix("/bridge/devices")
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            continue
+        for dev in data if isinstance(data, list) else []:
+            ieee = (dev.get("ieee_address") or "").lower()
+            if ieee:
+                out[ieee] = {"base": base, "name": dev.get("friendly_name", "")}
+    return out
+
+
 async def z2m_bases(request):
     """Findet die Zigbee2MQTT-Instanzen über ihre zurückgehaltene Nachricht <base>/bridge/info."""
     found, seen = [], set()
@@ -312,18 +332,36 @@ async def put_store(request):
     return web.json_response({"ok": True})
 
 
+def common_prefix(object_ids):
+    """Gemeinsamer Anfang (an Unterstrichen getrennt) aller Entity-Namen eines Geräts, z. B. s2_bad_tem01 – nur bei ≥ 2 Entitäten."""
+    if len(object_ids) < 2:
+        return ""
+    parts = [o.split("_") for o in object_ids]
+    out = []
+    for group in zip(*parts):
+        if len(set(group)) != 1:
+            break
+        out.append(group[0])
+    return "_".join(out)
+
+
 def entity_changes(items, entities):
-    """Bestimmt, welche Entity-IDs sich beim Umbenennen der Geräte ändern würden."""
+    """Bestimmt, welche Entity-IDs sich beim Umbenennen der Geräte ändern würden.
+    Liefert (Änderungen, Übersprungenes, Erklärung je Gerät)."""
     by_dev = {}
     for ent in entities:
         by_dev.setdefault(ent.get("device_id"), []).append(ent)
     existing = {e["entity_id"] for e in entities}
-    changes, skipped = [], []
+    changes, skipped, info = [], [], []
     for it in items:
         new_slug = slugify(it["name"])
+        devents = by_dev.get(it["device_id"], [])
+        objs = [e["entity_id"].partition(".")[2] for e in devents]
         candidates = list(dict.fromkeys(
-            c for c in (slugify(it.get("old_name") or ""), slugify(it.get("orig_name") or "")) if c))
-        for ent in by_dev.get(it["device_id"], []):
+            c for c in (slugify(it.get("old_name") or ""), slugify(it.get("orig_name") or ""), common_prefix(objs)) if c))
+        mine = {"device": it["name"], "entities": [e["entity_id"] for e in devents][:6], "count": len(devents), "reason": ""}
+        n_before = len(changes) + len(skipped)
+        for ent in devents:
             domain, _, obj = ent["entity_id"].partition(".")
             for cand in candidates:
                 if new_slug and (obj == cand or obj.startswith(cand + "_")):
@@ -336,7 +374,15 @@ def entity_changes(items, entities):
                         existing.add(new_id)
                         changes.append({"old": ent["entity_id"], "new": new_id})
                     break
-    return changes, skipped
+        if len(changes) + len(skipped) == n_before:
+            if not devents:
+                mine["reason"] = "none"       # Gerät hat keine Entitäten
+            elif new_slug and all(o == new_slug or o.startswith(new_slug + "_") for o in objs):
+                mine["reason"] = "already"    # Entity-IDs enthalten den neuen Namen bereits
+            else:
+                mine["reason"] = "nomatch"    # keine ID beginnt mit dem alten Namen
+        info.append(mine)
+    return changes, skipped, info
 
 
 async def scan_configs():
@@ -488,17 +534,17 @@ async def create_missing_areas(targets, errors):
 async def plan(request):
     body = await request.json()
     items = parse_request(body)
-    changes, skipped, usages, unreadable, notes = [], [], [], 0, []
+    changes, skipped, usages, unreadable, notes, info = [], [], [], 0, [], []
     if body.get("rename_entities") and items:
         entities = (await ha([{"type": "config/entity_registry/list"}]))[0]
-        changes, skipped = entity_changes(items, entities)
+        changes, skipped, info = entity_changes(items, entities)
         if changes:
             usages, unreadable, notes = await collect_usages(body, {c["old"]: c["new"] for c in changes})
     targets = await resolve_areas(body, items)
     area_changes = [{"device": it["name"], "from": it.get("current_area") or "", "to": targets[it["device_id"]]["name"],
                      "create": targets[it["device_id"]]["create"]} for it in items if it["device_id"] in targets]
     return web.json_response({"entities": changes, "skipped": skipped, "usages": usages,
-                              "unreadable": unreadable, "notes": notes, "areas": area_changes})
+                              "unreadable": unreadable, "notes": notes, "areas": area_changes, "entity_info": info})
 
 
 def use_z2m(body):
@@ -625,7 +671,7 @@ async def apply(request):
     prog_start(pid, len(items) * 2 + 4)
     prog(pid, "Lese Entitäten …", 0)
     entities = (await ha([{"type": "config/entity_registry/list"}]))[0] if z2m_mode else []
-    changes, skipped = entity_changes(items, entities) if z2m_mode else ([], [])
+    changes, skipped, _info = entity_changes(items, entities) if z2m_mode else ([], [], [])
     targets = await resolve_areas(body, items)
     await create_missing_areas(targets, errors)
     for it in items:
@@ -634,13 +680,24 @@ async def apply(request):
             it["area_id"] = tgt["id"]
 
     failed_ids = set()
+    owners = {}
+    if z2m_on and any(i.get("source") == "z2m" for i in items):
+        prog(pid, "Suche die Zigbee2MQTT-Instanz der Geräte …", 0)
+        owners = await z2m_devices()
     for n, it in enumerate(items, 1):
         prog(pid, f"Benenne um ({n}/{len(items)}): {it['name']}", 0)
         if z2m_on and it.get("source") == "z2m" and it.get("ieee"):
             # In Zigbee2MQTT umbenennen und Z2Ms Antwort abwarten; die HA-Entity-IDs ändern wir selbst, damit wir sie kennen
-            base = safe_topic(it.get("base_topic"))
-            failure = await z2m_failure(base, await z2m_request(
-                base, "device/rename", {"from": it["ieee"], "to": it["name"], "homeassistant_rename": z2m_mode}))
+            owner = owners.get(it["ieee"].lower())
+            base = owner["base"] if owner else safe_topic(it.get("base_topic"))  # die Instanz, in der das Gerät wirklich steckt
+            result = await z2m_request(base, "device/rename", {"from": it["ieee"], "to": it["name"], "homeassistant_rename": z2m_mode})
+            if result.get("status") == "timeout":  # keine Antwort: prüfen, ob Z2M den neuen Namen trotzdem schon führt
+                now = (await z2m_devices()).get(it["ieee"].lower())
+                if now and now["name"] == it["name"]:
+                    result = {"status": "ok"}
+            failure = await z2m_failure(base, result)
+            if failure and owner is None and owners:
+                failure += f" Das Gerät {it['ieee']} wurde in keiner gefundenen Zigbee2MQTT-Instanz gelistet."
             ok, res = (failure is None), failure
             cmd = {}
         else:
