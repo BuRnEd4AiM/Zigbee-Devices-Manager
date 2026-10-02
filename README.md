@@ -18,6 +18,7 @@ Namensschema vergibst.
   - GROSS / klein / wie eingegeben
 - **Haus-Präfix:** Muster mit `{house}`, z. B. `{house}-{room}-{type}{nr}` → `H1-wzfl-lband01`. Häuser, Räume und Typen mit eigenen Kürzeln (Groß-/Kleinschreibung wählbar), Standard-Haus plus Auswahl je Gerät
 - Mehrfachauswahl → Raum/Typ zuweisen → „Vorschläge übernehmen“
+- **Prüfung nach dem Umbenennen:** Das Add-on liest den Stand aus Home Assistant neu ein und zeigt ✅/⚠️/❌ für Gerätenamen (bei Z2M mit bis zu 15 s Wartezeit), Entity-IDs und verbliebene alte Verweise in Automationen, YAML und Node-RED. „Erneut prüfen“ liest erneut nach.
 - Geplante Geräte reservieren Namen/Nummern
 - Optional: Entitäts-IDs mitumbenennen
 - Export als CSV/JSON, Schema-Export/-Import
