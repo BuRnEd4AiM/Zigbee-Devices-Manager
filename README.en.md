@@ -14,6 +14,7 @@ German version: [README.md](README.md)
   - Automatic counter per room+type that skips names already in use
   - Counter as Arabic (`01`), Roman (`III`) or letters (`C`)
   - UPPER / lower / as typed
+- **House prefix:** patterns with `{house}`, e.g. `{house}-{room}-{type}{nr}` → `H1-wzfl-lband01`. Houses, rooms and types with their own abbreviations, a default house plus per-device choice
 - Multi-select → assign room/type → "apply suggestions"
 - Planned devices reserve names/numbers
 - Optional: rename entity IDs along with the device
@@ -37,6 +38,9 @@ a browser. Rebuild with `python3 scripts/build_demo.py` (also available as a Git
 - **Rename entity IDs:** shows a preview of the new entity IDs first. For Zigbee2MQTT the device is also renamed in Z2M itself
   (via `mqtt.publish` to `<base_topic>/bridge/request/device/rename`; set the base topic in the add-on options: `z2m_base_topic`).
 - **Update references:** replaces the old entity IDs in automations, scripts, scenes and dashboards managed via the UI.
-  Preview first, old configs are backed up to `/data/backups/`. YAML files and YAML dashboards are not modified.
+  Preview first, old configs are backed up to `/data/backups/`. Optionally also **YAML files** under `/config` (packages, `configuration.yaml`, YAML dashboards …; plain text replacement
+  with word boundaries, comments are kept) and **Node-RED flows** (`flows.json` of the Node-RED add-on). Check/reload the config
+  after YAML changes and restart Node-RED afterwards. The add-on mounts `/config` and `/addon_configs` for this.
+  `.storage`, `custom_components` and `secrets.yaml` are never touched.
 - Pairing new devices still happens in ZHA/Z2M; they show up here as "new" automatically.
 - Scheme and assignments are stored in the add-on's `/data/store.json`.

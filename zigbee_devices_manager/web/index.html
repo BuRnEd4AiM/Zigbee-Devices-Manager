@@ -47,7 +47,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 .panel h2{margin:0 0 10px;font-size:15px}
 .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
 .row label{min-width:110px;color:var(--muted)}
-.list .row input:first-child{flex:1}.list .row input.abbr{width:80px;flex:none;font-family:ui-monospace,monospace;text-transform:uppercase}
+.list .row input:first-child{flex:1}.list .row input.abbr{width:80px;flex:none;font-family:ui-monospace,monospace}
 .preview{background:var(--chip);border-radius:6px;padding:10px;font-family:ui-monospace,monospace;line-height:1.8}
 .tok{cursor:pointer;background:var(--chip);border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-family:ui-monospace,monospace;font-size:12px}
 .x{background:none;border:0;color:var(--muted);cursor:pointer;font-size:16px}
@@ -81,6 +81,8 @@ const DEFAULT_SCHEME = {
   pattern: "{room}_{type}_{nr}",
   case: "upper",
   counter: {style: "arabic", pad: 2, start: 1},
+  houses: [{id: "h1", name: "Haus 1", abbr: "H1"}, {id: "h2", name: "Haus 2", abbr: "H2"}],
+  defaultHouse: "h1",
   rooms: [
     {id: "r1", name: "Wohnzimmer", abbr: "WZ"}, {id: "r2", name: "Küche", abbr: "KU"},
     {id: "r3", name: "Schlafzimmer", abbr: "SZ"}, {id: "r4", name: "Bad", abbr: "BD"},
@@ -141,16 +143,16 @@ function fmtNr(n, c) {
   return String(n).padStart(c.pad, "0");
 }
 function applyCase(s, mode) { return mode === "upper" ? s.toUpperCase() : mode === "lower" ? s.toLowerCase() : s; }
-function buildName(scheme, room, type, n) {
+function buildName(scheme, room, type, n, house) {
   const s = scheme.pattern
-    .replaceAll("{room}", room?.abbr ?? "").replaceAll("{type}", type?.abbr ?? "")
+    .replaceAll("{house}", house?.abbr ?? "").replaceAll("{room}", room?.abbr ?? "").replaceAll("{type}", type?.abbr ?? "")
     .replaceAll("{nr}", fmtNr(n, scheme.counter));
   return applyCase(s, scheme.case);
 }
-/** Nächste freie Nummer für Raum+Typ, berücksichtigt bereits belegte Namen. */
-function nextName(scheme, room, type, used) {
+/** Nächste freie Nummer für Haus+Raum+Typ, berücksichtigt bereits belegte Namen. */
+function nextName(scheme, room, type, used, house) {
   for (let n = scheme.counter.start; n < 10000; n++) {
-    const name = buildName(scheme, room, type, n);
+    const name = buildName(scheme, room, type, n, house);
     if (!used.has(name.toLowerCase())) return name;
   }
 }
@@ -180,7 +182,7 @@ const api = {
   payload(list) {
     return list.map(([d, name]) => ({device_id: d.id, name, old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee}));
   },
-  opts() { return {rename_entities: S.renameEntities, update_references: S.renameEntities && S.updateRefs}; },
+  opts() { const on = S.renameEntities; return {rename_entities: on, update_references: on && S.updateRefs, update_yaml: on && S.updateYaml, update_nodered: on && S.updateNodered}; },
   async post(path, body) {
     const r = await fetch(path, {method: "POST", body: JSON.stringify(body)});
     if (!r.ok) throw new Error(await r.text());
@@ -190,8 +192,11 @@ const api = {
     if (this.demo) {
       const slug = t => t.toLowerCase().replace(/ä/g, "a").replace(/ö/g, "o").replace(/ü/g, "u").replace(/ß/g, "ss").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
       const entities = list.flatMap(([d, name]) => [["light", ""], ["sensor", "_battery"]].map(([dom, suf]) => ({old: `${dom}.${slug(d.name)}${suf}`, new: `${dom}.${slug(name)}${suf}`})));
-      const usages = this.opts().update_references ? [{kind: "automation", title: "Beispiel: Licht abends an", entities: [entities[0].old]}, {kind: "dashboard", title: "Übersicht", entities: entities.map(e => e.old)}] : [];
-      return {entities, skipped: [], usages, unreadable: 0};
+      const o = this.opts(), usages = [];
+      if (o.update_references) usages.push({kind: "automation", title: "Beispiel: Licht abends an", entities: [entities[0].old]}, {kind: "dashboard", title: "Übersicht", entities: entities.map(e => e.old)});
+      if (o.update_yaml) usages.push({kind: "yaml", title: "packages/licht.yaml", entities: [entities[0].old]});
+      if (o.update_nodered) usages.push({kind: "nodered", title: "a0d7b954_nodered/flows.json", entities: entities.map(e => e.old)});
+      return {entities, skipped: [], usages, unreadable: 0, notes: []};
     }
     return this.post("api/plan", {items: this.payload(list), ...this.opts()});
   },
@@ -205,7 +210,7 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), editing: null, renameEntities: false, updateRefs: true};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), editing: null, renameEntities: false, updateRefs: true, updateYaml: false, updateNodered: false};
 
 function persist() {
   clearTimeout(persist.t);
@@ -214,16 +219,18 @@ function persist() {
 const allRows = () => [...S.devices, ...S.planned.map(p => ({id: p.id, name: p.name, orig_name: "", manufacturer: "", model: "", ieee: "", area: "", is_new: false, planned: true}))];
 const roomOf = d => { const id = S.meta[d.id]?.room; return S.scheme.rooms.find(r => r.id === id) || S.scheme.rooms.find(r => d.area && r.name.toLowerCase() === d.area.toLowerCase()); };
 const typeOf = d => S.scheme.types.find(t => t.id === S.meta[d.id]?.type);
+const houseOf = d => S.scheme.houses.find(h => h.id === (S.meta[d.id]?.house || S.scheme.defaultHouse));
+const useHouse = () => S.scheme.pattern.includes("{house}");
 
 /** Berechnet Namensvorschläge für alle Zeilen mit Raum+Typ, die noch nicht dem Schema entsprechen. */
 function suggestions() {
   const rows = allRows(), out = new Map();
-  const pending = rows.filter(d => typeOf(d) && (!S.scheme.pattern.includes("{room}") || roomOf(d)));
+  const pending = rows.filter(d => typeOf(d) && (!S.scheme.pattern.includes("{room}") || roomOf(d)) && (!useHouse() || houseOf(d)));
   const pendIds = new Set(pending.map(d => d.id));
   const used = new Set(rows.filter(d => !pendIds.has(d.id)).map(d => d.name.toLowerCase()));
   for (const d of pending) {
     const room = roomOf(d), type = typeOf(d);
-    const name = nextName(S.scheme, room, type, used);
+    const name = nextName(S.scheme, room, type, used, houseOf(d));
     used.add(name.toLowerCase());
     out.set(d.id, name);
   }
@@ -240,6 +247,7 @@ function renderDevices() {
     return !q || [d.name, d.orig_name, d.ieee, d.model, d.manufacturer, d.area].join(" ").toLowerCase().includes(q);
   });
   const roomOpts = sel => `<option value="">–</option>` + S.scheme.rooms.map(r => `<option value="${r.id}"${r.id === sel ? " selected" : ""}>${esc(r.abbr)} · ${esc(r.name)}</option>`).join("");
+  const houseOpts = sel => `<option value="">–</option>` + S.scheme.houses.map(h => `<option value="${h.id}"${h.id === sel ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("");
   const typeOpts = sel => `<option value="">–</option>` + S.scheme.types.map(t => `<option value="${t.id}"${t.id === sel ? " selected" : ""}>${esc(t.abbr)} · ${esc(t.name)}</option>`).join("");
   const counts = {all: allRows().length, new: allRows().filter(d => d.is_new).length};
   const applicable = rows.filter(d => sug.has(d.id) && sug.get(d.id) !== d.name);
@@ -253,17 +261,20 @@ function renderDevices() {
     </div>
     <div class="bar">
       <span class="sub">${S.sel.size} ausgewählt</span>
+      ${useHouse() ? `<select id="bHouse">${houseOpts("")}</select>` : ""}
       <select id="bRoom">${roomOpts("")}</select>
       <select id="bType">${typeOpts("")}</select>
-      <button class="btn" id="bAssign" ${S.sel.size ? "" : "disabled"}>Raum/Typ zuweisen</button>
+      <button class="btn" id="bAssign" ${S.sel.size ? "" : "disabled"}>Zuweisen</button>
       <span style="flex:1"></span>
       <label class="sub" title="Zigbee2MQTT-Geräte werden direkt in Z2M umbenannt. Entity-IDs, die den alten Namen enthalten, werden angepasst."><input type="checkbox" id="rEnt" ${S.renameEntities ? "checked" : ""}> Entity-IDs mitziehen (Z2M: dort umbenennen)</label>
       <label class="sub" title="Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards (mit Sicherung)"><input type="checkbox" id="rRef" ${S.updateRefs ? "checked" : ""} ${S.renameEntities ? "" : "disabled"}> Verweise in Automationen/Dashboards anpassen</label>
+      <label class="sub" title="Ersetzt die alten Entity-IDs in allen YAML-Dateien unter /config (Packages, configuration.yaml, …). Danach Konfiguration prüfen und neu laden."><input type="checkbox" id="rYaml" ${S.updateYaml ? "checked" : ""} ${S.renameEntities ? "" : "disabled"}> YAML-Dateien anpassen</label>
+      <label class="sub" title="Ersetzt die alten Entity-IDs in den Node-RED-Flows. Node-RED danach neu starten, sonst überschreibt ein Deploy die Änderung."><input type="checkbox" id="rNode" ${S.updateNodered ? "checked" : ""} ${S.renameEntities ? "" : "disabled"}> Node-RED-Flows anpassen</label>
       <button class="btn primary" id="applyAll" ${applicable.length ? "" : "disabled"}>${applicable.length} Vorschläge übernehmen</button>
     </div>
     <div class="card"><table>
       <thead><tr><th><input type="checkbox" id="selAll" ${rows.length && rows.every(d => S.sel.has(d.id)) ? "checked" : ""}></th>
-        <th>Name</th><th>Neuer Vorschlag</th><th>Raum</th><th>Typ</th><th class="hide-s">Gerät</th><th class="hide-s">IEEE</th><th>Status</th><th></th></tr></thead>
+        <th>Name</th><th>Neuer Vorschlag</th>${useHouse() ? "<th>Haus</th>" : ""}<th>Raum</th><th>Typ</th><th class="hide-s">Gerät</th><th class="hide-s">IEEE</th><th>Status</th><th></th></tr></thead>
       <tbody>${rows.map(d => {
         const s = sug.get(d.id), r = roomOf(d), t = typeOf(d);
         const nameCell = S.editing === d.id
@@ -273,6 +284,7 @@ function renderDevices() {
           <td><input type="checkbox" class="sel" ${S.sel.has(d.id) ? "checked" : ""}></td>
           <td class="name" title="Klicken zum Bearbeiten">${nameCell}</td>
           <td>${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}</td>
+          ${useHouse() ? `<td><select class="house">${houseOpts(houseOf(d)?.id)}</select></td>` : ""}
           <td><select class="room">${roomOpts(r?.id)}</select></td>
           <td><select class="type">${typeOpts(t?.id)}</select></td>
           <td class="hide-s">${esc(d.manufacturer)}<div class="sub">${esc(d.model || d.orig_name)}</div></td>
@@ -280,7 +292,7 @@ function renderDevices() {
           <td><span class="badge ${d.planned ? "plan" : d.is_new ? "new" : "ok"}">${d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}</span></td>
           <td>${s && s !== d.name ? `<button class="btn apply">Übernehmen</button>` : ""}${d.planned ? `<button class="x delP" title="Entfernen">✕</button>` : ""}</td>
         </tr>`;
-      }).join("") || `<tr><td colspan="9" class="empty">Keine Geräte gefunden.</td></tr>`}</tbody>
+      }).join("") || `<tr><td colspan="10" class="empty">Keine Geräte gefunden.</td></tr>`}</tbody>
     </table></div>`;
 
   const root = $("#tab-devices");
@@ -288,14 +300,16 @@ function renderDevices() {
   root.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { S.filter = b.dataset.f; renderDevices(); });
   $("#rEnt", root).onchange = e => { S.renameEntities = e.target.checked; renderDevices(); };
   $("#rRef", root).onchange = e => S.updateRefs = e.target.checked;
+  $("#rYaml", root).onchange = e => S.updateYaml = e.target.checked;
+  $("#rNode", root).onchange = e => S.updateNodered = e.target.checked;
   $("#selAll", root).onchange = e => { rows.forEach(d => e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id)); renderDevices(); };
   $("#addPlanned", root).onclick = () => {
     const name = prompt("Name des geplanten Geräts (wird reserviert, damit die Nummer nicht doppelt vergeben wird):");
     if (name?.trim()) { S.planned.push({id: uid("p_"), name: name.trim()}); persist(); renderDevices(); }
   };
   $("#bAssign", root).onclick = () => {
-    const room = $("#bRoom", root).value, type = $("#bType", root).value;
-    S.sel.forEach(id => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type})}; });
+    const room = $("#bRoom", root).value, type = $("#bType", root).value, house = $("#bHouse", root)?.value;
+    S.sel.forEach(id => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type}), ...(house && {house})}; });
     persist(); renderDevices();
   };
   $("#applyAll", root).onclick = async () => {
@@ -305,6 +319,7 @@ function renderDevices() {
   root.querySelectorAll("tbody tr[data-id]").forEach(tr => {
     const d = rows.find(x => x.id === tr.dataset.id);
     $(".sel", tr).onchange = e => { e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id); renderDevices(); };
+    $(".house", tr) && ($(".house", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], house: e.target.value}; persist(); renderDevices(); });
     $(".room", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], room: e.target.value}; persist(); renderDevices(); };
     $(".type", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], type: e.target.value}; persist(); renderDevices(); };
     $(".apply", tr) && ($(".apply", tr).onclick = async () => { if (await applyBatch([[d, sug.get(d.id)]])) toast("Name übernommen"); renderDevices(); });
@@ -328,16 +343,20 @@ function renderDevices() {
 /** Zeigt die geplanten Änderungen und wartet auf Bestätigung. */
 function confirmPlan(plan, count) {
   return new Promise(resolve => {
-    const kinds = {automation: "Automation", script: "Skript", scene: "Szene", dashboard: "Dashboard"};
+    const kinds = {automation: "Automation", script: "Skript", scene: "Szene", dashboard: "Dashboard", yaml: "YAML", nodered: "Node-RED"};
+    const refs = S.updateRefs || S.updateYaml || S.updateNodered;
     const dlg = document.createElement("dialog");
     dlg.style.cssText = "max-width:640px;width:92%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
     dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${count} Gerät(e) umbenennen</h2>
       <p class="sub">Entity-IDs, die sich ändern (${plan.entities.length}):</p>
       <div class="preview" style="max-height:160px;overflow:auto">${plan.entities.map(e => `${esc(e.old)} → <b>${esc(e.new)}</b>`).join("<br>") || "keine"}</div>
       ${plan.skipped.length ? `<p class="sub">Übersprungen: ${plan.skipped.map(s => esc(s.old) + " (" + esc(s.reason) + ")").join(", ")}</p>` : ""}
-      ${S.updateRefs ? `<p class="sub" style="margin-top:12px">Verweise, die angepasst werden (${plan.usages.length}):</p>
+      ${refs ? `<p class="sub" style="margin-top:12px">Verweise, die angepasst werden (${plan.usages.length}):</p>
       <div class="preview" style="max-height:160px;overflow:auto">${plan.usages.map(u => `${kinds[u.kind] || u.kind}: <b>${esc(u.title)}</b> <span class="sub">(${u.entities.length} Entität${u.entities.length == 1 ? "" : "en"})</span>`).join("<br>") || "keine gefunden"}</div>
       ${plan.unreadable ? `<p class="sub">${plan.unreadable} Automationen/Szenen sind nicht über die Oberfläche lesbar (YAML) und werden <b>nicht</b> angepasst.</p>` : ""}
+      ${(plan.notes || []).map(n => `<p class="sub">⚠ ${esc(n)}</p>`).join("")}
+      ${S.updateNodered ? `<p class="sub">Node-RED danach neu starten, sonst überschreibt ein Deploy die Änderung.</p>` : ""}
+      ${S.updateYaml ? `<p class="sub">YAML geändert: danach Konfiguration prüfen und neu laden.</p>` : ""}
       <p class="sub">Vorher wird eine Sicherung der geänderten Konfigurationen unter /data/backups abgelegt.</p>` : ""}
       <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="no">Abbrechen</button><button class="btn primary" id="yes">Umbenennen</button></div>`;
     document.body.appendChild(dlg); dlg.showModal();
@@ -368,16 +387,21 @@ async function applyBatch(items) {
 
 // ---------- Schema-Tab ----------
 function renderScheme() {
-  const sc = S.scheme, c = sc.counter, r0 = sc.rooms[0], t0 = sc.types[0], r1 = sc.rooms[1] || r0;
+  const sc = S.scheme, c = sc.counter, r0 = sc.rooms[0], t0 = sc.types[0], r1 = sc.rooms[1] || r0, h0 = sc.houses[0], h1 = sc.houses[1] || h0;
   const used = new Set(), ex = [];
-  for (const [r, t] of [[r0, t0], [r0, t0], [r0, t0], [r1, t0], [r0, sc.types[1] || t0]]) { const n = nextName(sc, r, t, used); used.add(n.toLowerCase()); ex.push(n); }
+  for (const [h, r, t] of [[h0, r0, t0], [h0, r0, t0], [h0, r0, t0], [h0, r1, t0], [h1, r0, t0], [h0, r0, sc.types[1] || t0]]) { const n = nextName(sc, r, t, used, h); used.add(n.toLowerCase()); ex.push(n); }
   const list = (kind, items) => items.map(i => `<div class="row" data-id="${i.id}">
       <input data-k="name" value="${esc(i.name)}" placeholder="Name"><input class="abbr" data-k="abbr" value="${esc(i.abbr)}" placeholder="Kürzel" maxlength="8">
       <button class="x" data-del="${kind}" title="Entfernen">✕</button></div>`).join("");
   $("#tab-scheme").innerHTML = `<div class="grid">
     <div class="panel"><h2>Muster</h2>
       <div class="row"><label>Muster</label><input id="pat" value="${esc(sc.pattern)}" style="flex:1"></div>
-      <div class="row"><label></label>${["{room}", "{type}", "{nr}"].map(t => `<button class="tok" data-tok="${t}">${t}</button>`).join("")}<span class="sub">Trenner (_ - . Leerzeichen) frei wählbar</span></div>
+      <div class="row"><label></label>${["{house}", "{room}", "{type}", "{nr}"].map(t => `<button class="tok" data-tok="${t}">${t}</button>`).join("")}<span class="sub">Trenner (_ - . Leerzeichen) frei wählbar</span></div>
+      <div class="row"><label>Beispiele</label><select id="ex"><option value="">Muster wählen…</option>
+        <option value="{room}_{type}_{nr}">{room}_{type}_{nr}  → wz_lp_01</option>
+        <option value="{house}-{room}-{type}{nr}">{house}-{room}-{type}{nr}  → H1-wzfl-lband01</option>
+        <option value="{house}_{room}_{type}_{nr}">{house}_{room}_{type}_{nr}  → H1_wz_lp_01</option></select></div>
+      <div class="row"><label>Standard-Haus</label><select id="dh">${sc.houses.map(h => `<option value="${h.id}"${h.id === sc.defaultHouse ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("")}</select><span class="sub">für Geräte ohne eigene Haus-Auswahl</span></div>
       <div class="row"><label>Schreibweise</label><select id="case"><option value="upper">GROSS</option><option value="lower">klein</option><option value="keep">wie eingegeben</option></select></div>
       <div class="row"><label>Zähler</label><select id="cst"><option value="arabic">1, 2, 3</option><option value="roman">I, II, III</option><option value="alpha">A, B, C</option></select>
         <input id="cpad" type="number" min="1" max="6" value="${c.pad}" style="width:64px" title="Stellen (nur 1,2,3)" ${c.style === "arabic" ? "" : "disabled"}>
@@ -385,6 +409,7 @@ function renderScheme() {
       <h2 style="margin-top:16px">Vorschau</h2><div class="preview">${ex.map(esc).join("<br>")}</div>
       <p class="sub">Der Zähler zählt je Raum+Typ automatisch hoch und überspringt bereits vergebene Namen.</p>
     </div>
+    <div class="panel list"><h2>Häuser / Präfix</h2>${list("houses", sc.houses)}<button class="btn" data-add="houses">＋ Haus</button></div>
     <div class="panel list"><h2>Räume</h2>${list("rooms", sc.rooms)}<button class="btn" data-add="rooms">＋ Raum</button></div>
     <div class="panel list"><h2>Gerätetypen</h2>${list("types", sc.types)}<button class="btn" data-add="types">＋ Typ</button></div>
   </div>`;
@@ -393,13 +418,15 @@ function renderScheme() {
   const upd = () => { persist(); renderScheme(); };
   $("#pat", root).onchange = e => { sc.pattern = e.target.value; upd(); };
   root.querySelectorAll("[data-tok]").forEach(b => b.onclick = () => { sc.pattern += b.dataset.tok; upd(); });
+  $("#ex", root).onchange = e => { if (e.target.value) { sc.pattern = e.target.value; if (e.target.value.includes("{house}")) sc.case = "keep"; upd(); } };
+  $("#dh", root).onchange = e => { sc.defaultHouse = e.target.value; upd(); };
   $("#case", root).onchange = e => { sc.case = e.target.value; upd(); };
   $("#cst", root).onchange = e => { c.style = e.target.value; upd(); };
   $("#cpad", root).onchange = e => { c.pad = Math.max(1, +e.target.value || 1); upd(); };
   $("#cstart", root).onchange = e => { c.start = Math.max(0, +e.target.value || 0); upd(); };
   root.querySelectorAll(".list .row").forEach(row => {
     const kind = row.parentElement.querySelector("[data-add]").dataset.add, item = sc[kind].find(i => i.id === row.dataset.id);
-    row.querySelectorAll("input").forEach(inp => inp.onchange = () => { item[inp.dataset.k] = inp.dataset.k === "abbr" ? inp.value.trim().toUpperCase() : inp.value.trim(); upd(); });
+    row.querySelectorAll("input").forEach(inp => inp.onchange = () => { item[inp.dataset.k] = inp.value.trim(); upd(); });
     row.querySelector("[data-del]").onclick = () => { sc[kind] = sc[kind].filter(i => i !== item); upd(); };
   });
   root.querySelectorAll("[data-add]").forEach(b => b.onclick = () => { sc[b.dataset.add].push({id: uid("x"), name: "Neu", abbr: "NE"}); upd(); });
@@ -414,7 +441,7 @@ function renderExport() {
       <button class="btn" id="sExp">Schema exportieren</button> <button class="btn" id="sImp">Schema importieren…</button>
       <input type="file" id="sFile" accept="application/json" hidden></div>
   </div>`;
-  const rows = () => allRows().map(d => ({name: d.name, ieee: d.ieee, hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area, raum: roomOf(d)?.name || "", typ: typeOf(d)?.name || "", status: d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}));
+  const rows = () => allRows().map(d => ({name: d.name, ieee: d.ieee, hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area, haus: houseOf(d)?.name || "", raum: roomOf(d)?.name || "", typ: typeOf(d)?.name || "", status: d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}));
   $("#csv").onclick = () => {
     const r = rows(), h = Object.keys(r[0] || {name: ""});
     download("zigbee-geraete.csv", [h, ...r.map(o => h.map(k => o[k]))].map(l => l.map(v => `"${String(v).replaceAll('"', '""')}"`).join(";")).join("\n"), "text/csv");
@@ -426,7 +453,7 @@ function renderExport() {
     try {
       const s = JSON.parse(await e.target.files[0].text());
       if (!s.pattern || !Array.isArray(s.rooms) || !Array.isArray(s.types) || !s.counter) throw new Error("Ungültiges Schema");
-      S.scheme = s; persist(); toast("Schema importiert");
+      S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, ...s}; persist(); toast("Schema importiert");
     } catch (err) { toast("Import fehlgeschlagen: " + err.message); }
   };
 }
@@ -442,7 +469,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   const data = await api.load();
   S.devices = data.devices;
   const st = data.store || {};
-  if (st.scheme?.pattern) S.scheme = st.scheme;
+  if (st.scheme?.pattern) S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, ...st.scheme};
   S.meta = st.meta || {}; S.planned = st.planned || [];
   if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee-Geräte geladen und umbenannt.</div>`;
   renderDevices();

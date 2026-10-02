@@ -16,6 +16,7 @@ Namensschema vergibst.
   - Automatisches Hochzählen je Raum+Typ, überspringt belegte Namen
   - Zähler arabisch (`01`), römisch (`III`) oder Buchstaben (`C`)
   - GROSS / klein / wie eingegeben
+- **Haus-Präfix:** Muster mit `{house}`, z. B. `{house}-{room}-{type}{nr}` → `H1-wzfl-lband01`. Häuser, Räume und Typen mit eigenen Kürzeln (Groß-/Kleinschreibung wählbar), Standard-Haus plus Auswahl je Gerät
 - Mehrfachauswahl → Raum/Typ zuweisen → „Vorschläge übernehmen“
 - Geplante Geräte reservieren Namen/Nummern
 - Optional: Entitäts-IDs mitumbenennen
@@ -42,7 +43,10 @@ herunterladen und im Browser öffnen. Neu erzeugen mit `python3 scripts/build_de
   Add-on-Optionen: `z2m_base_topic`, Standard `zigbee2mqtt`).
 - **Verweise anpassen:** Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards, die über die
   Oberfläche gepflegt werden. Vorschau vorab, Sicherung der alten Konfiguration unter `/data/backups/`.
-  YAML-Dateien und YAML-Dashboards werden nicht verändert (nur als „nicht lesbar“ gezählt).
+  Optional zusätzlich: **YAML-Dateien** unter `/config` (Packages, `configuration.yaml`, YAML-Dashboards …, reiner Textersatz
+  mit Wortgrenzen, Kommentare bleiben erhalten) und **Node-RED-Flows** (`flows.json` im Node-RED-Add-on). Nach YAML-Änderungen
+  Konfiguration prüfen/neu laden, Node-RED danach neu starten. Das Add-on bindet dafür `/config` und `/addon_configs` ein.
+  Nicht geändert werden `.storage`, `custom_components`, `secrets.yaml`.
 - Echtes Anlernen neuer Geräte passiert weiterhin in ZHA/Z2M; neue Geräte erscheinen hier automatisch als „neu“.
 - Schema und Zuweisungen liegen in `/data/store.json` des Add-ons.
 

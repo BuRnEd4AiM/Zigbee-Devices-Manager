@@ -13,6 +13,11 @@ WEB = Path(__file__).parent / "web"
 TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 WS_URL = os.environ.get("HA_WS_URL", "ws://supervisor/core/websocket")
 STORE_FILE = DATA / "store.json"
+HA_CONFIG_DIR = Path(os.environ.get("HA_CONFIG_DIR", "/homeassistant"))
+ADDON_CONFIGS_DIR = Path(os.environ.get("ADDON_CONFIGS_DIR", "/addon_configs"))
+SKIP_DIRS = {".storage", ".git", ".cloud", "custom_components", "deps", "__pycache__", "backups", "node_modules", "www"}
+UI_MANAGED_YAML = {"automations.yaml", "scripts.yaml", "scenes.yaml"}
+MAX_FILE_BYTES = 5_000_000
 CORE_API = os.environ.get("HA_API_URL", "http://supervisor/core/api")
 
 
@@ -161,9 +166,47 @@ async def scan_configs():
     return items, unreadable
 
 
+def scan_files(want_yaml, want_nodered, skip_ui_yaml):
+    """Findet YAML-Dateien in /config und Node-RED-Flows. Gibt (Einträge, Hinweise) zurück."""
+    items, notes = [], []
+
+    def add(kind, path, title):
+        try:
+            if path.stat().st_size <= MAX_FILE_BYTES:
+                items.append({"kind": kind, "id": str(path), "path": path, "title": title,
+                              "text": path.read_text(encoding="utf-8")})
+        except (OSError, UnicodeDecodeError):
+            pass
+
+    if want_yaml:
+        if not HA_CONFIG_DIR.is_dir():
+            notes.append(f"{HA_CONFIG_DIR} ist nicht eingebunden – YAML-Dateien werden nicht durchsucht")
+        else:
+            for root, dirs, files in os.walk(HA_CONFIG_DIR):
+                dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+                for f in files:
+                    path = Path(root) / f
+                    if path.suffix not in (".yaml", ".yml") or f == "secrets.yaml":
+                        continue
+                    if skip_ui_yaml and path.parent == HA_CONFIG_DIR and f in UI_MANAGED_YAML:
+                        continue
+                    add("yaml", path, str(path.relative_to(HA_CONFIG_DIR)))
+    if want_nodered:
+        flows = [p for p in ADDON_CONFIGS_DIR.glob("*/flows*.json") if "cred" not in p.name] if ADDON_CONFIGS_DIR.is_dir() else []
+        if not flows:
+            notes.append("Keine Node-RED-Flows gefunden (Add-on-Konfigurationen nicht eingebunden oder Node-RED nicht installiert)")
+        for path in flows:
+            add("nodered", path, f"{path.parent.name}/{path.name}")
+    return items, notes
+
+
 def mapping_regex(mapping):
     keys = sorted(mapping, key=len, reverse=True)
     return re.compile(r"(?<!\w)(" + "|".join(re.escape(k) for k in keys) + r")(?!\w)")
+
+
+def item_text(it):
+    return it["text"] if "text" in it else json.dumps(it["config"], ensure_ascii=False)
 
 
 def find_usages(items, mapping):
@@ -172,7 +215,7 @@ def find_usages(items, mapping):
     rx = mapping_regex(mapping)
     out = []
     for it in items:
-        found = sorted(set(rx.findall(json.dumps(it["config"], ensure_ascii=False))))
+        found = sorted(set(rx.findall(item_text(it))))
         if found:
             out.append({**{k: it[k] for k in ("kind", "id", "title")}, "entities": found})
     return out
@@ -185,17 +228,29 @@ def parse_request(body):
     return items
 
 
+async def collect_usages(body, mapping):
+    """Sucht Verweise in UI-Konfigurationen, YAML-Dateien und Node-RED-Flows (je nach Optionen)."""
+    items, unreadable, notes = [], 0, []
+    if body.get("update_references"):
+        items, unreadable = await scan_configs()
+    if body.get("update_yaml") or body.get("update_nodered"):
+        files, notes = scan_files(body.get("update_yaml"), body.get("update_nodered"),
+                                  skip_ui_yaml=bool(body.get("update_references")))
+        items += files
+    return find_usages(items, mapping), unreadable, notes
+
+
 async def plan(request):
     body = await request.json()
     items = parse_request(body)
-    changes, skipped, usages, unreadable = [], [], [], 0
+    changes, skipped, usages, unreadable, notes = [], [], [], 0, []
     if body.get("rename_entities") and items:
         entities = (await ha([{"type": "config/entity_registry/list"}]))[0]
         changes, skipped = entity_changes(items, entities)
-        if body.get("update_references") and changes:
-            configs, unreadable = await scan_configs()
-            usages = find_usages(configs, {c["old"]: c["new"] for c in changes})
-    return web.json_response({"entities": changes, "skipped": skipped, "usages": usages, "unreadable": unreadable})
+        if changes:
+            usages, unreadable, notes = await collect_usages(body, {c["old"]: c["new"] for c in changes})
+    return web.json_response({"entities": changes, "skipped": skipped, "usages": usages,
+                              "unreadable": unreadable, "notes": notes})
 
 
 async def ha_try(cmd):
@@ -233,19 +288,39 @@ async def apply(request):
         (renamed.append(ch) if ok else errors.append({"device": ch["old"], "error": res}))
 
     changed_refs, unreadable = [], 0
-    if renamed and body.get("update_references"):
-        configs, unreadable = await scan_configs()
+    notes = []
+    if renamed and (body.get("update_references") or body.get("update_yaml") or body.get("update_nodered")):
+        configs, unreadable = await scan_configs() if body.get("update_references") else ([], 0)
+        if body.get("update_yaml") or body.get("update_nodered"):
+            files, notes = scan_files(body.get("update_yaml"), body.get("update_nodered"),
+                                      skip_ui_yaml=bool(body.get("update_references")))
+            configs += files
         mapping = {c["old"]: c["new"] for c in renamed}
         rx = mapping_regex(mapping)
         backup = DATA / "backups" / time.strftime("%Y%m%d-%H%M%S")
         async with ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as http:
             for it in configs:
-                text = json.dumps(it["config"], ensure_ascii=False)
+                text = item_text(it)
                 if not rx.search(text):
                     continue
                 backup.mkdir(parents=True, exist_ok=True)
-                (backup / f"{it['kind']}__{slugify(str(it['id'])) or 'default'}.json").write_text(text)
-                new_cfg = json.loads(rx.sub(lambda m: mapping[m.group(1)], text))
+                label = it["title"] if it["kind"] in ("yaml", "nodered") else str(it["id"])
+                (backup / f"{it['kind']}__{slugify(label) or 'default'}.bak").write_text(text)
+                new_text = rx.sub(lambda m: mapping[m.group(1)], text)
+                if it["kind"] in ("yaml", "nodered"):
+                    try:
+                        if it["kind"] == "nodered":
+                            json.loads(new_text)  # nur schreiben, wenn das Ergebnis gültiges JSON bleibt
+                        it["path"].write_text(new_text, encoding="utf-8")
+                        ok, res = True, ""
+                    except (OSError, ValueError) as err:
+                        ok, res = False, str(err)
+                    if ok:
+                        changed_refs.append({"kind": it["kind"], "title": it["title"]})
+                    else:
+                        errors.append({"device": f"{it['kind']} {it['title']}", "error": res})
+                    continue
+                new_cfg = json.loads(new_text)
                 if it["kind"] == "dashboard":
                     cmd = {"type": "lovelace/config/save", "config": new_cfg}
                     if it["url_path"]:
@@ -260,7 +335,7 @@ async def apply(request):
                     errors.append({"device": f"{it['kind']} {it['title']}", "error": res})
     return web.json_response({"ok": not errors, "renamed_devices": done, "renamed_entities": renamed,
                               "skipped": skipped, "updated_references": changed_refs,
-                              "unreadable": unreadable, "errors": errors})
+                              "unreadable": unreadable, "notes": notes, "errors": errors})
 
 
 async def index(request):
