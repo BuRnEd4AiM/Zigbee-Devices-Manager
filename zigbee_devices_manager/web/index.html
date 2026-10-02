@@ -111,9 +111,9 @@ const DEMO_AREAS = [["Wohnzimmer", "fl_eg"], ["Küche", "fl_eg"], ["Flur", "fl_e
 const DEMO_BRIDGES = [{id: "b1", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 1)"}, {id: "b2", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 2)"}];
 const DEMO_DEVICES = [
   ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0001", "Wohnzimmer", "Wohnzimmer Stehlampe"],
-  ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0002", "Wohnzimmer", null],
+  ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0002", "Wohnzimmer", "WZ_LP_05"],
   ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0003", "Wohnzimmer", null],
-  ["Hue white ambiance", "Signify Netherlands B.V.", "LTW013", "0x001788010a1b2c03", "Küche", null],
+  ["Hue white ambiance", "Signify Netherlands B.V.", "LTW013", "0x001788010a1b2c03", "Küche", "KU_LP_01"],
   ["lumi.weather", "LUMI", "WSDCGQ11LM", "0x00158d0001a2b3c4", "Schlafzimmer", null],
   ["lumi.weather", "LUMI", "WSDCGQ11LM", "0x00158d0001a2b3c5", "", null],
   ["lumi.sensor_motion.aq2", "LUMI", "RTCGQ11LM", "0x00158d0002c4d5e6", "Flur", null],
@@ -323,13 +323,57 @@ const floorOf = d => {
   return sc.floors.find(f => area?.floor_id && f.floor_id === area.floor_id) || sc.floors.find(f => f.id === sc.defaultFloor);
 };
 
+/** Baut aus dem Namensmuster einen regulären Ausdruck mit den vorhandenen Kürzeln. */
+function patternRegex(sc) {
+  const esc = t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const alt = items => items.map(i => i.abbr).filter(Boolean).sort((a, b) => b.length - a.length).map(esc).join("|");
+  const nrRe = sc.counter.style === "roman" ? "[IVXLCDM]+" : sc.counter.style === "alpha" ? "[A-Z]+" : "\\d+";
+  const lists = {house: sc.houses, floor: sc.floors, room: sc.rooms, type: sc.types};
+  const keys = []; let src = "";
+  for (const part of sc.pattern.split(/(\{(?:house|floor|room|type|nr)\})/)) {
+    const m = /^\{(house|floor|room|type|nr)\}$/.exec(part);
+    if (!m) { src += esc(part); continue; }
+    const a = m[1] === "nr" ? nrRe : alt(lists[m[1]] || []);
+    if (!a) return null;
+    keys.push(m[1]); src += "(" + a + ")";
+  }
+  return {re: new RegExp("^" + src + "$", "i"), keys};
+}
+/** Zerlegt einen vorhandenen Namen nach dem Muster: {house, floor, room, type, nr} (IDs bzw. Nummer) oder null. */
+function parseName(name) {
+  const pr = patternRegex(S.scheme); if (!pr) return null;
+  const m = pr.re.exec((name || "").trim()); if (!m) return null;
+  const sc = S.scheme, lists = {house: sc.houses, floor: sc.floors, room: sc.rooms, type: sc.types}, out = {};
+  pr.keys.forEach((k, i) => { const v = m[i + 1]; out[k] = k === "nr" ? v : lists[k].find(x => x.abbr.toLowerCase() === v.toLowerCase())?.id; });
+  return out;
+}
+/** Ordnet Haus/Etage/Raum/Typ aus bereits vergebenen Namen zu. overwrite=false: nur Geräte ohne eigene Auswahl. */
+function syncFromNames(overwrite) {
+  let matched = 0, unmatched = 0;
+  for (const d of S.devices) {
+    const p = parseName(d.name);
+    if (!p) { if (!d.is_new) unmatched++; continue; }
+    if (!overwrite && Object.keys(S.meta[d.id] || {}).length) { matched++; continue; }
+    const m = {...S.meta[d.id]};
+    for (const k of ["house", "floor", "room", "type"]) if (p[k]) m[k] = p[k];
+    S.meta[d.id] = m; matched++;
+  }
+  persist();
+  return {matched, unmatched};
+}
+
 /** Berechnet Namensvorschläge für alle Zeilen mit Raum+Typ, die noch nicht dem Schema entsprechen. */
 function suggestions() {
   const rows = allRows(), out = new Map();
   const pending = rows.filter(d => typeOf(d) && (!S.scheme.pattern.includes("{room}") || roomOf(d)) && (!useHouse() || houseOf(d)) && (!useFloor() || floorOf(d)));
   const pendIds = new Set(pending.map(d => d.id));
   const used = new Set(rows.filter(d => !pendIds.has(d.id)).map(d => d.name.toLowerCase()));
-  for (const d of pending) {
+  // Passt der aktuelle Name schon zu Haus/Etage/Raum/Typ, bleibt er (samt Nummer) bestehen
+  const fits = d => { const p = parseName(d.name); return p && (!("house" in p) || p.house === houseOf(d)?.id) && (!("floor" in p) || p.floor === floorOf(d)?.id)
+    && (!("room" in p) || p.room === roomOf(d)?.id) && (!("type" in p) || p.type === typeOf(d)?.id); };
+  const keep = pending.filter(fits);
+  for (const d of keep) { out.set(d.id, d.name); used.add(d.name.toLowerCase()); }
+  for (const d of pending.filter(d => !keep.includes(d))) {
     const room = roomOf(d), type = typeOf(d);
     const name = nextName(S.scheme, room, type, used, houseOf(d), floorOf(d));
     used.add(name.toLowerCase());
@@ -345,6 +389,7 @@ function renderDevices() {
     if (S.filter === "new" && !d.is_new) return false;
     if (S.filter === "named" && (d.is_new || d.planned)) return false;
     if (S.filter === "planned" && !d.planned) return false;
+    if (S.filter === "odd" && (d.is_new || d.planned || parseName(d.name))) return false;
     if (S.gwFilter && d.bridge !== S.gwFilter) return false;
     return !q || [d.name, d.orig_name, d.ieee, d.model, d.manufacturer, d.area].join(" ").toLowerCase().includes(q);
   });
@@ -359,9 +404,10 @@ function renderDevices() {
   $("#tab-devices").innerHTML = `
     <div class="bar">
       <input id="q" type="search" placeholder="Suchen (Name, IEEE, Modell, Raum)…" value="${esc(S.q)}" style="width:280px">
-      <div class="chips">${[["all", "Alle"], ["new", "Neu (" + counts.new + ")"], ["named", "Benannt"], ["planned", "Geplant"]].map(([k, l]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}">${l}</button>`).join("")}</div>
+      <div class="chips">${[["all", "Alle"], ["new", "Neu (" + counts.new + ")"], ["named", "Benannt"], ["odd", "Passt nicht (" + allRows().filter(d => !d.is_new && !d.planned && !parseName(d.name)).length + ")"], ["planned", "Geplant"]].map(([k, l]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}">${l}</button>`).join("")}</div>
       ${multiGw ? `<select id="gwf"><option value="">Alle Gateways</option>${S.bridges.map(b => `<option value="${esc(b.id)}"${S.gwFilter === b.id ? " selected" : ""}>${esc(gwLabel(b.id))}</option>`).join("")}</select>` : ""}
       <span style="flex:1"></span>
+      <button class="btn" id="fromNames" title="Liest Haus, Etage, Raum und Typ aus den vorhandenen Namen (nach deinen Kürzeln) und wählt sie aus. Passende Namen bleiben unverändert.">⟳ Aus Namen zuordnen</button>
       <button class="btn" id="reload" title="Liest alle Geräte neu aus Home Assistant">↻ Neu laden</button>
       <button class="btn" id="addPlanned">＋ Neues Gerät planen</button>
     </div>
@@ -418,6 +464,11 @@ function renderDevices() {
   $("#rYaml", root).onchange = e => S.updateYaml = e.target.checked;
   $("#rNode", root).onchange = e => S.updateNodered = e.target.checked;
   $("#selAll", root).onchange = e => { rows.forEach(d => e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id)); renderDevices(); };
+  $("#fromNames", root).onclick = () => {
+    const r = syncFromNames(true);
+    toast(`${r.matched} Namen erkannt und zugeordnet, ${r.unmatched} passen nicht zum Muster`);
+    renderDevices();
+  };
   $("#reload", root).onclick = async () => { await refreshFromHA(); renderDevices(); };
   $("#addPlanned", root).onclick = () => {
     const name = prompt("Name des geplanten Geräts (wird reserviert, damit die Nummer nicht doppelt vergeben wird):");
@@ -760,6 +811,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   else if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee-Geräte geladen und umbenannt.</div>`;
   S.scheme.floors = S.scheme.floors || clone(DEFAULT_SCHEME.floors); S.scheme.defaultFloor = S.scheme.defaultFloor || "";
   syncFloors(); syncAreas();
+  syncFromNames(false); // Geräte ohne eigene Auswahl: Zuordnung aus dem vorhandenen Namen
   renderDevices();
   detectBases().then(n => { if (n) { toast(n + " Z2M-Basis-Topic(s) erkannt"); } });
 })();
