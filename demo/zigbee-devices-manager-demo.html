@@ -315,7 +315,7 @@ function renderDevices() {
     </div>
     <div class="bar">
       <span class="sub">${S.sel.size} ausgewählt</span>
-      ${useHouse() ? `<select id="bHouse">${houseOpts("")}</select>` : ""}
+      <select id="bHouse" title="Haus">${houseOpts("")}</select>${useHouse() ? "" : `<button class="btn" id="houseOn" title="Im Namensschema steht {house} noch nicht. Klick fügt es vorne an das Muster an.">Haus im Muster aktivieren</button>`}
       <select id="bRoom">${roomOpts("")}</select>
       <select id="bType">${typeOpts("")}</select>
       <button class="btn" id="bAssign" ${S.sel.size ? "" : "disabled"}>Zuweisen</button>
@@ -328,7 +328,7 @@ function renderDevices() {
     </div>
     <div class="card"><table>
       <thead><tr><th><input type="checkbox" id="selAll" ${rows.length && rows.every(d => S.sel.has(d.id)) ? "checked" : ""}></th>
-        <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Gateway</th>" : ""}${useHouse() ? "<th>Haus</th>" : ""}<th>Raum</th><th>Typ</th><th class="hide-s">Gerät</th><th class="hide-s">IEEE</th><th>Status</th><th></th></tr></thead>
+        <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Gateway</th>" : ""}<th>Haus</th><th>Raum</th><th>Typ</th><th class="hide-s">Gerät</th><th class="hide-s">IEEE</th><th>Status</th><th></th></tr></thead>
       <tbody>${rows.map(d => {
         const s = sug.get(d.id), r = roomOf(d), t = typeOf(d);
         const nameCell = S.editing === d.id
@@ -339,7 +339,7 @@ function renderDevices() {
           <td class="name" title="Klicken zum Bearbeiten">${nameCell}</td>
           <td>${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}</td>
           ${multiGw ? `<td class="sub">${esc(d.planned ? "" : gwLabel(d.bridge))}</td>` : ""}
-          ${useHouse() ? `<td><select class="house">${houseOpts(houseOf(d)?.id)}</select></td>` : ""}
+          <td><select class="house">${houseOpts(houseOf(d)?.id)}</select></td>
           <td><select class="room">${roomOpts(r?.id)}</select></td>
           <td><select class="type">${typeOpts(t?.id)}</select></td>
           <td class="hide-s">${esc(d.manufacturer)}<div class="sub">${esc(d.model || d.orig_name)}</div></td>
@@ -354,6 +354,7 @@ function renderDevices() {
   $("#q", root).oninput = e => { S.q = e.target.value; const p = e.target.selectionStart; renderDevices(); const i = $("#q"); i.focus(); i.setSelectionRange(p, p); };
   root.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { S.filter = b.dataset.f; renderDevices(); });
   $("#gwf", root) && ($("#gwf", root).onchange = e => { S.gwFilter = e.target.value; renderDevices(); });
+  $("#houseOn", root) && ($("#houseOn", root).onclick = () => { S.scheme.pattern = "{house}-" + S.scheme.pattern; S.scheme.case = "keep"; persist(); toast("Muster: " + S.scheme.pattern); renderDevices(); });
   $("#rEnt", root).onchange = e => { S.renameEntities = e.target.checked; renderDevices(); };
   $("#rRef", root).onchange = e => S.updateRefs = e.target.checked;
   $("#rYaml", root).onchange = e => S.updateYaml = e.target.checked;
