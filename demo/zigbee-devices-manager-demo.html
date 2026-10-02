@@ -90,9 +90,9 @@ const DEFAULT_SCHEME = {
   pattern: "{room}_{type}_{nr}",
   case: "upper",
   counter: {style: "arabic", pad: 2, start: 1},
-  houses: [{id: "h1", name: "Haus 1", abbr: "H1"}, {id: "h2", name: "Haus 2", abbr: "H2"}],
+  houses: [{id: "h1", name: "Haus H", abbr: "H"}, {id: "h2", name: "Haus S", abbr: "S"}],
   defaultHouse: "h1",
-  floors: [{id: "f0", name: "Erdgeschoss", abbr: "H0"}, {id: "f1", name: "1. Etage", abbr: "H1"}, {id: "f2", name: "2. Etage", abbr: "H2"}, {id: "f3", name: "3. Etage", abbr: "H3"}],
+  floors: [{id: "f0", name: "Erdgeschoss", abbr: "0"}, {id: "f1", name: "1. Etage", abbr: "1"}, {id: "f2", name: "2. Etage", abbr: "2"}, {id: "f3", name: "3. Etage", abbr: "3"}],
   rooms: [
     {id: "r1", name: "Wohnzimmer", abbr: "WZ"}, {id: "r2", name: "Küche", abbr: "KU"},
     {id: "r3", name: "Schlafzimmer", abbr: "SZ"}, {id: "r4", name: "Bad", abbr: "BD"},
@@ -272,8 +272,9 @@ function syncFloors() {
     const same = sc.floors.find(x => !x.floor_id && x.name.toLowerCase() === f.name.toLowerCase());
     if (same) { same.floor_id = f.id; changed = true; continue; }
     const lvl = Number.isInteger(f.level) ? f.level : null;
-    let abbr = lvl === null ? makeAbbr(f.name, sc.floors) : lvl >= 0 ? "H" + lvl : "U" + -lvl;
-    const byAbbr = sc.floors.find(x => !x.floor_id && x.abbr.toLowerCase() === abbr.toLowerCase()); // z. B. Ebene 1 ↔ vorhandenes H1
+    let abbr = lvl === null ? makeAbbr(f.name, sc.floors) : lvl >= 0 ? String(lvl) : "U" + -lvl;
+    const alt = lvl !== null && lvl >= 0 ? ["H" + lvl] : []; // ältere Kürzel (H1) erkennen
+    const byAbbr = sc.floors.find(x => !x.floor_id && [abbr, ...alt].some(a => x.abbr.toLowerCase() === a.toLowerCase())); // z. B. Ebene 1 ↔ vorhandene Etage 1
     if (byAbbr) { byAbbr.floor_id = f.id; changed = true; continue; }
     while (sc.floors.some(x => x.abbr.toLowerCase() === abbr.toLowerCase())) abbr += "x";
     sc.floors.push({id: uid("f"), name: f.name, abbr, floor_id: f.id}); changed = true;
@@ -554,8 +555,10 @@ function renderScheme() {
     <div class="panel"><h2>Muster</h2>
       <div class="row"><label>Muster</label><input id="pat" value="${esc(sc.pattern)}" style="flex:1"></div>
       <div class="row"><label></label>${["{house}", "{floor}", "{room}", "{type}", "{nr}"].map(t => `<button class="tok" data-tok="${t}">${t}</button>`).join("")}<span class="sub">Trenner (_ - . Leerzeichen) frei wählbar</span></div>
+      <div class="row"><label>Voreinstellung</label><button class="btn" id="presetHF" title="Häuser H und S, Etagen 0–3, Muster {house}{floor}-{room}-{type}{nr}">H0, H1, S2 … (Haus-Buchstabe + Etagennummer)</button></div>
       <div class="row"><label>Beispiele</label><select id="ex"><option value="">Muster wählen…</option>
         <option value="{room}_{type}_{nr}">{room}_{type}_{nr}  → wz_lp_01</option>
+        <option value="{house}{floor}-{room}-{type}{nr}">{house}{floor}-{room}-{type}{nr}  → H1-wzfl-lband01 / S2-wzfl-lband01 (Haus-Buchstabe + Etage)</option>
         <option value="{floor}-{room}-{type}{nr}">{floor}-{room}-{type}{nr}  → H1-wzfl-lband01 (H1 = Etage)</option>
         <option value="{house}-{room}-{type}{nr}">{house}-{room}-{type}{nr}  → H1-wzfl-lband01 (H1 = Haus)</option>
         <option value="{house}-{floor}-{room}-{type}{nr}">{house}-{floor}-{room}-{type}{nr}  → A-H1-wzfl-lband01</option>
@@ -570,7 +573,7 @@ function renderScheme() {
       <p class="sub">Der Zähler zählt je Raum+Typ automatisch hoch und überspringt bereits vergebene Namen.</p>
     </div>
     <div class="panel list"><h2>Häuser / Präfix</h2>${list("houses", sc.houses)}<button class="btn" data-add="houses">＋ Haus</button></div>
-    <div class="panel list"><h2>Etagen</h2><p class="sub">z. B. H0 = Erdgeschoss, H1 = 1. Etage, S2 = …; frei wählbar. Etagen aus Home Assistant werden übernommen und per Raum/Bereich automatisch zugeordnet.</p>${list("floors", sc.floors)}<button class="btn" data-add="floors">＋ Etage</button></div>
+    <div class="panel list"><h2>Etagen</h2><p class="sub">Nummer oder Kürzel der Etage (0 = Erdgeschoss, 1, 2, 3 …). Zusammen mit dem Haus ergibt das z. B. H1 oder S2. Etagen aus Home Assistant werden übernommen und per Raum/Bereich automatisch zugeordnet.</p>${list("floors", sc.floors)}<button class="btn" data-add="floors">＋ Etage</button></div>
     <div class="panel list"><h2>Räume</h2>${list("rooms", sc.rooms)}<button class="btn" data-add="rooms">＋ Raum</button> <button class="btn" id="syncAreas" title="Bereiche aus Home Assistant als Räume übernehmen">⟳ Bereiche aus HA</button>${S.areas.length ? "" : ` <span class="sub">(keine Bereiche gefunden)</span>`}</div>
     <div class="panel list"><h2>Gerätetypen</h2>${list("types", sc.types)}<button class="btn" data-add="types">＋ Typ</button></div>
   </div>`;
@@ -579,6 +582,13 @@ function renderScheme() {
   const upd = () => { persist(); renderScheme(); };
   $("#pat", root).onchange = e => { sc.pattern = e.target.value; upd(); };
   root.querySelectorAll("[data-tok]").forEach(b => b.onclick = () => { sc.pattern += b.dataset.tok; upd(); });
+  $("#presetHF", root).onclick = () => {
+    // Haus = Buchstabe (H, S), Etage = Nummer (0, 1, 2 …) → zusammen H1, S2 …; vorhandene Etagen behalten Namen und HA-Verknüpfung
+    sc.houses = clone(DEFAULT_SCHEME.houses); sc.defaultHouse = "h1";
+    // nur Haus-Buchstaben abtrennen, „U1“ (Untergeschoss) bleibt
+    sc.floors.forEach(f => { const m = /^[HhSs](\d+)$/.exec(f.abbr.trim()); if (m) f.abbr = m[1]; });
+    sc.pattern = "{house}{floor}-{room}-{type}{nr}"; sc.case = "keep"; upd(); toast("Voreinstellung gesetzt: " + sc.pattern);
+  };
   $("#ex", root).onchange = e => { if (e.target.value) { sc.pattern = e.target.value; if (/\{(house|floor)\}/.test(e.target.value)) sc.case = "keep"; upd(); } };
   $("#df", root).onchange = e => { sc.defaultFloor = e.target.value; upd(); };
   $("#dh", root).onchange = e => { sc.defaultHouse = e.target.value; upd(); };
