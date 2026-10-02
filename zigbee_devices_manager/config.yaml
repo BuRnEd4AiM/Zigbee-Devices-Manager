@@ -16,3 +16,7 @@ panel_icon: mdi:zigbee
 panel_title: Zigbee Namen
 panel_admin: true
 homeassistant_api: true
+options:
+  z2m_base_topic: zigbee2mqtt
+schema:
+  z2m_base_topic: str

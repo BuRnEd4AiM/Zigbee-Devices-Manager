@@ -182,7 +182,7 @@ const api = {
       try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); n[d.id] = name; localStorage.setItem("zdm-demo-names", JSON.stringify(n)); } catch (e) {}
       return;
     }
-    const r = await fetch("api/rename", {method: "POST", body: JSON.stringify({device_id: d.id, name, old_name: d.name, rename_entities: renameEntities})});
+    const r = await fetch("api/rename", {method: "POST", body: JSON.stringify({device_id: d.id, name, old_name: d.name, rename_entities: renameEntities, source: d.source, ieee: d.ieee})});
     if (!r.ok) throw new Error(await r.text());
   }
 };
@@ -240,7 +240,7 @@ function renderDevices() {
       <select id="bType">${typeOpts("")}</select>
       <button class="btn" id="bAssign" ${S.sel.size ? "" : "disabled"}>Raum/Typ zuweisen</button>
       <span style="flex:1"></span>
-      <label class="sub" title="Benennt auch die zugehörigen Entitäten (entity_id) um, sofern sie den alten Gerätenamen enthalten"><input type="checkbox" id="rEnt" ${S.renameEntities ? "checked" : ""}> Entitäts-IDs mitziehen</label>
+      <label class="sub" title="Zigbee2MQTT-Geräte werden direkt in Z2M umbenannt (inkl. HA-Entity-IDs). Andere: Entity-IDs, die den alten Namen enthalten, werden angepasst."><input type="checkbox" id="rEnt" ${S.renameEntities ? "checked" : ""}> Entitäts-IDs mitziehen / in Z2M umbenennen</label>
       <button class="btn primary" id="applyAll" ${applicable.length ? "" : "disabled"}>${applicable.length} Vorschläge übernehmen</button>
     </div>
     <div class="card"><table>
