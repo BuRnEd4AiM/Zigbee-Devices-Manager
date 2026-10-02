@@ -585,7 +585,8 @@ function renderScheme() {
   $("#presetHF", root).onclick = () => {
     // Haus = Buchstabe (H, S), Etage = Nummer (0, 1, 2 …) → zusammen H1, S2 …; vorhandene Etagen behalten Namen und HA-Verknüpfung
     sc.houses = clone(DEFAULT_SCHEME.houses); sc.defaultHouse = "h1";
-    sc.floors.forEach(f => { const m = /^[HhSs](\d+)$/.exec(f.abbr.trim()); // nur Haus-Buchstaben abtrennen, „U1“ (Untergeschoss) bleibt if (m) f.abbr = m[1]; });
+    // nur Haus-Buchstaben abtrennen, „U1“ (Untergeschoss) bleibt
+    sc.floors.forEach(f => { const m = /^[HhSs](\d+)$/.exec(f.abbr.trim()); if (m) f.abbr = m[1]; });
     sc.pattern = "{house}{floor}-{room}-{type}{nr}"; sc.case = "keep"; upd(); toast("Voreinstellung gesetzt: " + sc.pattern);
   };
   $("#ex", root).onchange = e => { if (e.target.value) { sc.pattern = e.target.value; if (/\{(house|floor)\}/.test(e.target.value)) sc.case = "keep"; upd(); } };
