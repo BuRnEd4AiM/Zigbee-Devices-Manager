@@ -501,6 +501,11 @@ async def plan(request):
                               "unreadable": unreadable, "notes": notes, "areas": area_changes})
 
 
+def use_z2m(body):
+    """Ob in Zigbee2MQTT umbenannt werden soll (ältere Clients: gekoppelt an „Entity-IDs mitziehen“)."""
+    return bool(body.get("rename_z2m", body.get("rename_entities")))
+
+
 def check(name, status, detail=""):
     return {"name": name, "status": status, "detail": detail}
 
@@ -524,7 +529,7 @@ async def verify_changes(items, renamed, opts, wait=True):
         checks.append(check("Gerätenamen", "ok", f"{len(items)} Gerät(e) heißen jetzt wie geplant"))
     else:
         names = ", ".join(it["name"] for it in wrong)
-        z2m = any(it.get("source") == "z2m" and opts.get("rename_entities") for it in wrong)
+        z2m = any(it.get("source") == "z2m" and use_z2m(opts) for it in wrong)
         checks.append(check("Gerätenamen", "warn" if z2m else "fail",
                             f"Noch nicht übernommen: {names}" + (
                                 " – Zigbee2MQTT hat die Umbenennung noch nicht bestätigt (Basis-Topic und Z2M-Log prüfen, später erneut prüfen)" if z2m else "")))
@@ -613,7 +618,8 @@ async def apply(request):
     items = parse_request(body)
     if not items:
         raise web.HTTPBadRequest(text="Keine Geräte angegeben")
-    z2m_mode = bool(body.get("rename_entities"))
+    z2m_mode = bool(body.get("rename_entities"))  # Entity-IDs in Home Assistant anpassen
+    z2m_on = use_z2m(body)                          # Gerät in Zigbee2MQTT umbenennen
     errors, done = [], []
     pid = body.get("progress_id")
     prog_start(pid, len(items) * 2 + 4)
@@ -630,11 +636,11 @@ async def apply(request):
     failed_ids = set()
     for n, it in enumerate(items, 1):
         prog(pid, f"Benenne um ({n}/{len(items)}): {it['name']}", 0)
-        if z2m_mode and it.get("source") == "z2m" and it.get("ieee"):
+        if z2m_on and it.get("source") == "z2m" and it.get("ieee"):
             # In Zigbee2MQTT umbenennen und Z2Ms Antwort abwarten; die HA-Entity-IDs ändern wir selbst, damit wir sie kennen
             base = safe_topic(it.get("base_topic"))
             failure = await z2m_failure(base, await z2m_request(
-                base, "device/rename", {"from": it["ieee"], "to": it["name"], "homeassistant_rename": True}))
+                base, "device/rename", {"from": it["ieee"], "to": it["name"], "homeassistant_rename": z2m_mode}))
             ok, res = (failure is None), failure
             cmd = {}
         else:
@@ -655,7 +661,7 @@ async def apply(request):
                 errors.append({"device": f"Bereich für {it['name']}", "error": res2})
 
     renamed = []
-    z2m_ok = {i["device_id"] for i in items if i["device_id"] in done and i.get("source") == "z2m" and z2m_mode}
+    z2m_ok = {i["device_id"] for i in items if i["device_id"] in done and i.get("source") == "z2m" and z2m_on}
     ids_by_entity = {e["entity_id"]: e.get("device_id") for e in entities}
     changes = [c for c in changes if ids_by_entity.get(c["old"]) not in failed_ids]  # nichts ändern, wenn Z2M nicht umbenannt hat
     # Z2M benennt mit homeassistant_rename die Entity-IDs ggf. selbst um: kurz abwarten, dann nur Fehlendes selbst erledigen
