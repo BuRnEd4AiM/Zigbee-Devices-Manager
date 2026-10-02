@@ -37,11 +37,12 @@ herunterladen und im Browser öffnen. Neu erzeugen mit `python3 scripts/build_de
 ## Hinweise
 
 - Standard: Umbenennen in der Home-Assistant-Geräte-Registry (`name_by_user`).
-- **Zigbee2MQTT:** Mit „Entitäts-IDs mitziehen / in Z2M umbenennen“ wird das Gerät direkt in Z2M umbenannt
-  (Friendly-Name, MQTT-Topic und HA-Entity-IDs, per `mqtt.publish` an `<base_topic>/bridge/request/device/rename`).
-  Den Basis-Topic stellst du in den Add-on-Optionen ein (`z2m_base_topic`, Standard `zigbee2mqtt`). Das Ergebnis
-  wird nicht zurückgemeldet; prüfe es bei den ersten Geräten in Z2M.
-- Automationen/Dashboards mit alten Entity-IDs werden nicht angepasst.
+- **Entity-IDs mitziehen:** Zeigt vor dem Umbenennen eine Vorschau der neuen Entity-IDs. Bei Zigbee2MQTT wird das Gerät
+  zusätzlich direkt in Z2M umbenannt (per `mqtt.publish` an `<base_topic>/bridge/request/device/rename`; Basis-Topic in den
+  Add-on-Optionen: `z2m_base_topic`, Standard `zigbee2mqtt`).
+- **Verweise anpassen:** Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards, die über die
+  Oberfläche gepflegt werden. Vorschau vorab, Sicherung der alten Konfiguration unter `/data/backups/`.
+  YAML-Dateien und YAML-Dashboards werden nicht verändert (nur als „nicht lesbar“ gezählt).
 - Echtes Anlernen neuer Geräte passiert weiterhin in ZHA/Z2M; neue Geräte erscheinen hier automatisch als „neu“.
 - Schema und Zuweisungen liegen in `/data/store.json` des Add-ons.
 

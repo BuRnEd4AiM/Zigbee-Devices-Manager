@@ -178,18 +178,35 @@ const api = {
     const r = await fetch("api/store", {method: "PUT", body: JSON.stringify(store)});
     if (!r.ok) throw new Error(await r.text());
   },
-  async rename(d, name, renameEntities) {
-    if (this.demo) {
-      try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); n[d.id] = name; localStorage.setItem("zdm-demo-names", JSON.stringify(n)); } catch (e) {}
-      return;
-    }
-    const r = await fetch("api/rename", {method: "POST", body: JSON.stringify({device_id: d.id, name, old_name: d.name, rename_entities: renameEntities, source: d.source, ieee: d.ieee})});
+  payload(list) {
+    return list.map(([d, name]) => ({device_id: d.id, name, old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee}));
+  },
+  opts() { return {rename_entities: S.renameEntities, update_references: S.renameEntities && S.updateRefs}; },
+  async post(path, body) {
+    const r = await fetch(path, {method: "POST", body: JSON.stringify(body)});
     if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+  async plan(list) {
+    if (this.demo) {
+      const slug = t => t.toLowerCase().replace(/ä/g, "a").replace(/ö/g, "o").replace(/ü/g, "u").replace(/ß/g, "ss").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+      const entities = list.flatMap(([d, name]) => [["light", ""], ["sensor", "_battery"]].map(([dom, suf]) => ({old: `${dom}.${slug(d.name)}${suf}`, new: `${dom}.${slug(name)}${suf}`})));
+      const usages = this.opts().update_references ? [{kind: "automation", title: "Beispiel: Licht abends an", entities: [entities[0].old]}, {kind: "dashboard", title: "Übersicht", entities: entities.map(e => e.old)}] : [];
+      return {entities, skipped: [], usages, unreadable: 0};
+    }
+    return this.post("api/plan", {items: this.payload(list), ...this.opts()});
+  },
+  async apply(list) {
+    if (this.demo) {
+      try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); list.forEach(([d, name]) => n[d.id] = name); localStorage.setItem("zdm-demo-names", JSON.stringify(n)); } catch (e) {}
+      return {ok: true, errors: [], renamed_entities: [], updated_references: []};
+    }
+    return this.post("api/apply", {items: this.payload(list), ...this.opts()});
   }
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), editing: null, renameEntities: false};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), editing: null, renameEntities: false, updateRefs: true};
 
 function persist() {
   clearTimeout(persist.t);
@@ -241,7 +258,8 @@ function renderDevices() {
       <select id="bType">${typeOpts("")}</select>
       <button class="btn" id="bAssign" ${S.sel.size ? "" : "disabled"}>Raum/Typ zuweisen</button>
       <span style="flex:1"></span>
-      <label class="sub" title="Zigbee2MQTT-Geräte werden direkt in Z2M umbenannt (inkl. HA-Entity-IDs). Andere: Entity-IDs, die den alten Namen enthalten, werden angepasst."><input type="checkbox" id="rEnt" ${S.renameEntities ? "checked" : ""}> Entitäts-IDs mitziehen / in Z2M umbenennen</label>
+      <label class="sub" title="Zigbee2MQTT-Geräte werden direkt in Z2M umbenannt. Entity-IDs, die den alten Namen enthalten, werden angepasst."><input type="checkbox" id="rEnt" ${S.renameEntities ? "checked" : ""}> Entity-IDs mitziehen (Z2M: dort umbenennen)</label>
+      <label class="sub" title="Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards (mit Sicherung)"><input type="checkbox" id="rRef" ${S.updateRefs ? "checked" : ""} ${S.renameEntities ? "" : "disabled"}> Verweise in Automationen/Dashboards anpassen</label>
       <button class="btn primary" id="applyAll" ${applicable.length ? "" : "disabled"}>${applicable.length} Vorschläge übernehmen</button>
     </div>
     <div class="card"><table>
@@ -269,7 +287,8 @@ function renderDevices() {
   const root = $("#tab-devices");
   $("#q", root).oninput = e => { S.q = e.target.value; const p = e.target.selectionStart; renderDevices(); const i = $("#q"); i.focus(); i.setSelectionRange(p, p); };
   root.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { S.filter = b.dataset.f; renderDevices(); });
-  $("#rEnt", root).onchange = e => S.renameEntities = e.target.checked;
+  $("#rEnt", root).onchange = e => { S.renameEntities = e.target.checked; renderDevices(); };
+  $("#rRef", root).onchange = e => S.updateRefs = e.target.checked;
   $("#selAll", root).onchange = e => { rows.forEach(d => e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id)); renderDevices(); };
   $("#addPlanned", root).onclick = () => {
     const name = prompt("Name des geplanten Geräts (wird reserviert, damit die Nummer nicht doppelt vergeben wird):");
@@ -281,15 +300,15 @@ function renderDevices() {
     persist(); renderDevices();
   };
   $("#applyAll", root).onclick = async () => {
-    let n = 0; for (const d of applicable) { if (await applyName(d, sug.get(d.id))) n++; }
-    toast(n + " Namen übernommen"); renderDevices();
+    const n = await applyBatch(applicable.map(d => [d, sug.get(d.id)]));
+    if (n) toast(n + " Namen übernommen"); renderDevices();
   };
   root.querySelectorAll("tbody tr[data-id]").forEach(tr => {
     const d = rows.find(x => x.id === tr.dataset.id);
     $(".sel", tr).onchange = e => { e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id); renderDevices(); };
     $(".room", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], room: e.target.value}; persist(); renderDevices(); };
     $(".type", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], type: e.target.value}; persist(); renderDevices(); };
-    $(".apply", tr) && ($(".apply", tr).onclick = async () => { if (await applyName(d, sug.get(d.id))) toast("Name übernommen"); renderDevices(); });
+    $(".apply", tr) && ($(".apply", tr).onclick = async () => { if (await applyBatch([[d, sug.get(d.id)]])) toast("Name übernommen"); renderDevices(); });
     $(".delP", tr) && ($(".delP", tr).onclick = () => { S.planned = S.planned.filter(p => p.id !== d.id); persist(); renderDevices(); });
     $(".name", tr).onclick = () => { if (S.editing !== d.id) { S.editing = d.id; renderDevices(); const i = $("#edit"); i.focus(); i.select(); } };
   });
@@ -298,7 +317,7 @@ function renderDevices() {
     const done = async save => {
       const id = S.editing; S.editing = null;
       const d = allRows().find(x => x.id === id), v = edit.value.trim();
-      if (save && v && v !== d.name) await applyName(d, v);
+      if (save && v && v !== d.name) await applyBatch([[d, v]]);
       renderDevices();
     };
     edit.onkeydown = e => { if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); };
@@ -307,14 +326,45 @@ function renderDevices() {
   }
 }
 
-async function applyName(d, name) {
-  if (d.planned) { const p = S.planned.find(x => x.id === d.id); p.name = name; }
-  else {
-    try { await api.rename(d, name, S.renameEntities); }
-    catch (e) { toast("Fehler: " + e.message); return false; }
-    const dev = S.devices.find(x => x.id === d.id); dev.name = name; dev.is_new = false;
+/** Zeigt die geplanten Änderungen und wartet auf Bestätigung. */
+function confirmPlan(plan, count) {
+  return new Promise(resolve => {
+    const kinds = {automation: "Automation", script: "Skript", scene: "Szene", dashboard: "Dashboard"};
+    const dlg = document.createElement("dialog");
+    dlg.style.cssText = "max-width:640px;width:92%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
+    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${count} Gerät(e) umbenennen</h2>
+      <p class="sub">Entity-IDs, die sich ändern (${plan.entities.length}):</p>
+      <div class="preview" style="max-height:160px;overflow:auto">${plan.entities.map(e => `${esc(e.old)} → <b>${esc(e.new)}</b>`).join("<br>") || "keine"}</div>
+      ${plan.skipped.length ? `<p class="sub">Übersprungen: ${plan.skipped.map(s => esc(s.old) + " (" + esc(s.reason) + ")").join(", ")}</p>` : ""}
+      ${S.updateRefs ? `<p class="sub" style="margin-top:12px">Verweise, die angepasst werden (${plan.usages.length}):</p>
+      <div class="preview" style="max-height:160px;overflow:auto">${plan.usages.map(u => `${kinds[u.kind] || u.kind}: <b>${esc(u.title)}</b> <span class="sub">(${u.entities.length} Entität${u.entities.length == 1 ? "" : "en"})</span>`).join("<br>") || "keine gefunden"}</div>
+      ${plan.unreadable ? `<p class="sub">${plan.unreadable} Automationen/Szenen sind nicht über die Oberfläche lesbar (YAML) und werden <b>nicht</b> angepasst.</p>` : ""}
+      <p class="sub">Vorher wird eine Sicherung der geänderten Konfigurationen unter /data/backups abgelegt.</p>` : ""}
+      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="no">Abbrechen</button><button class="btn primary" id="yes">Umbenennen</button></div>`;
+    document.body.appendChild(dlg); dlg.showModal();
+    const end = v => { dlg.close(); dlg.remove(); resolve(v); };
+    $("#no", dlg).onclick = () => end(false); $("#yes", dlg).onclick = () => end(true);
+    dlg.oncancel = () => end(false);
+  });
+}
+
+/** items: [[device, neuerName], …]. Gibt die Anzahl umbenannter Geräte zurück. */
+async function applyBatch(items) {
+  const real = items.filter(([d]) => !d.planned);
+  for (const [d, name] of items.filter(([d]) => d.planned)) S.planned.find(p => p.id === d.id).name = name;
+  if (real.length) {
+    try {
+      if (S.renameEntities) {
+        const plan = await api.plan(real);
+        if (!await confirmPlan(plan, real.length)) return 0;
+      }
+      const res = await api.apply(real);
+      if (res.errors?.length) toast("Fehler: " + res.errors.map(e => e.device + ": " + e.error).join("; "));
+      else if (res.updated_references?.length) toast(res.updated_references.length + " Verweise angepasst");
+    } catch (e) { toast("Fehler: " + e.message); return 0; }
+    for (const [d, name] of real) { const dev = S.devices.find(x => x.id === d.id); dev.name = name; dev.is_new = false; }
   }
-  persist(); return true;
+  persist(); return items.length;
 }
 
 // ---------- Schema-Tab ----------
