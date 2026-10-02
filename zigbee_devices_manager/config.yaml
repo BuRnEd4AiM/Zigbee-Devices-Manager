@@ -1,5 +1,5 @@
 name: Zigbee Devices Manager
-version: "0.1.0"
+version: "0.2.0"
 slug: zigbee_devices_manager
 description: Geräte-Namen für Zigbee-Geräte zentral verwalten – mit Namensschema, Kürzeln und automatischem Hochzählen.
 url: https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager

@@ -1,19 +1,21 @@
 """Backend des Zigbee Devices Manager (Home Assistant Add-on, Ingress)."""
 import asyncio
 import json
+import logging
 import os
 import re
 import time
 import unicodedata
 from pathlib import Path
 
-from aiohttp import ClientSession, web
+from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 DATA = Path(os.environ.get("DATA_DIR", "/data"))
 WEB = Path(__file__).parent / "web"
 TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 WS_URL = os.environ.get("HA_WS_URL", "ws://supervisor/core/websocket")
 STORE_FILE = DATA / "store.json"
+log = logging.getLogger("zdm")
 HA_CONFIG_DIR = Path(os.environ.get("HA_CONFIG_DIR", "/homeassistant"))
 ADDON_CONFIGS_DIR = Path(os.environ.get("ADDON_CONFIGS_DIR", "/addon_configs"))
 SKIP_DIRS = {".storage", ".git", ".cloud", "custom_components", "deps", "__pycache__", "backups", "node_modules", "www"}
@@ -41,22 +43,26 @@ async def ha(commands):
     """Führt Websocket-Kommandos gegen Home Assistant aus und liefert die Ergebnisse."""
     if not TOKEN:
         raise web.HTTPServiceUnavailable(text="Kein SUPERVISOR_TOKEN – läuft nicht als Add-on")
-    async with ClientSession() as session, session.ws_connect(WS_URL) as ws:
-        await ws.receive_json()
-        await ws.send_json({"type": "auth", "access_token": TOKEN})
-        if (await ws.receive_json())["type"] != "auth_ok":
-            raise web.HTTPBadGateway(text="Authentifizierung bei Home Assistant fehlgeschlagen")
-        results = []
-        for i, cmd in enumerate(commands, 1):
-            await ws.send_json({**cmd, "id": i})
-            while True:
-                reply = await ws.receive_json()
-                if reply.get("id") == i:
-                    break
-            if not reply.get("success"):
-                raise web.HTTPBadGateway(text=reply.get("error", {}).get("message", "HA-Fehler"))
-            results.append(reply["result"])
-        return results
+    try:
+        # max_msg_size=0: große Antworten (viele Entitäten) dürfen die Verbindung nicht abbrechen
+        async with ClientSession(timeout=ClientTimeout(total=60)) as session, session.ws_connect(WS_URL, max_msg_size=0) as ws:
+            await ws.receive_json()
+            await ws.send_json({"type": "auth", "access_token": TOKEN})
+            if (await ws.receive_json())["type"] != "auth_ok":
+                raise web.HTTPBadGateway(text="Authentifizierung bei Home Assistant fehlgeschlagen")
+            results = []
+            for i, cmd in enumerate(commands, 1):
+                await ws.send_json({**cmd, "id": i})
+                while True:
+                    reply = await ws.receive_json()
+                    if reply.get("id") == i:
+                        break
+                if not reply.get("success"):
+                    raise web.HTTPBadGateway(text=f"{cmd['type']}: {reply.get('error', {}).get('message', 'HA-Fehler')}")
+                results.append(reply["result"])
+            return results
+    except (ClientError, asyncio.TimeoutError, ValueError) as err:
+        raise web.HTTPBadGateway(text=f"Keine Verbindung zu Home Assistant ({WS_URL}): {err!r}")
 
 
 def slugify(text):
@@ -454,11 +460,53 @@ async def index(request):
     return web.FileResponse(WEB / "index.html")
 
 
+@web.middleware
+async def errors(request, handler):
+    """Gibt Fehler als lesbaren Text zurück und schreibt sie ins Add-on-Log."""
+    try:
+        return await handler(request)
+    except web.HTTPException as err:
+        if err.status >= 500:
+            log.error("%s %s -> %s %s", request.method, request.path, err.status, err.text)
+        raise
+    except Exception as err:  # noqa: BLE001
+        log.exception("%s %s fehlgeschlagen", request.method, request.path)
+        return web.Response(status=500, text=f"Interner Fehler: {err!r}")
+
+
+async def diag(request):
+    """Schritt-für-Schritt-Diagnose der Verbindung zu Home Assistant."""
+    out = {"supervisor_token": bool(TOKEN), "ws_url": WS_URL, "steps": []}
+    for name, cmd in (("Geräte-Registry", {"type": "config/device_registry/list"}),
+                      ("Entitäten-Registry", {"type": "config/entity_registry/list"})):
+        try:
+            res = (await ha([cmd]))[0]
+            out["steps"].append({"step": name, "ok": True, "count": len(res)})
+            if name == "Geräte-Registry":
+                out["zigbee_devices"] = sum(1 for d in res if zigbee_source(d))
+        except web.HTTPException as err:
+            out["steps"].append({"step": name, "ok": False, "error": err.text})
+    out["config_dir"] = {"path": str(HA_CONFIG_DIR), "exists": HA_CONFIG_DIR.is_dir()}
+    out["addon_configs_dir"] = {"path": str(ADDON_CONFIGS_DIR), "exists": ADDON_CONFIGS_DIR.is_dir()}
+    return web.json_response(out)
+
+
+async def selftest(app):
+    """Beim Start ins Log schreiben, ob Home Assistant erreichbar ist."""
+    class Dummy:  # nur für den Aufruf der Diagnose
+        pass
+    result = json.loads((await diag(Dummy())).text)
+    log.info("Start: Token=%s, Zigbee-Geräte=%s, Schritte=%s", result["supervisor_token"],
+             result.get("zigbee_devices"), result["steps"])
+
+
 def make_app():
-    app = web.Application()
+    app = web.Application(middlewares=[errors])
+    app.on_startup.append(selftest)
     app.add_routes([
         web.get("/", index),
         web.get("/api/state", get_state),
+        web.get("/api/diag", diag),
         web.put("/api/store", put_store),
         web.post("/api/permit_join", permit_join),
         web.get("/api/permit_state", permit_state),
@@ -470,4 +518,5 @@ def make_app():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     web.run_app(make_app(), host="0.0.0.0", port=int(os.environ.get("PORT", 8099)))
