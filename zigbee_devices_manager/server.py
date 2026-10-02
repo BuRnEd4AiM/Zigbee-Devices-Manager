@@ -580,7 +580,8 @@ async def apply(request):
         if z2m_mode and it.get("source") == "z2m" and it.get("ieee"):
             # In Zigbee2MQTT umbenennen und Z2Ms Antwort abwarten; die HA-Entity-IDs ändern wir selbst, damit wir sie kennen
             base = safe_topic(it.get("base_topic"))
-            failure = z2m_failure(base, await z2m_request(base, "device/rename", {"from": it["ieee"], "to": it["name"]}))
+            failure = z2m_failure(base, await z2m_request(
+                base, "device/rename", {"from": it["ieee"], "to": it["name"], "homeassistant_rename": True}))
             ok, res = (failure is None), failure
             cmd = {}
         else:
@@ -601,10 +602,23 @@ async def apply(request):
                 errors.append({"device": f"Bereich für {it['name']}", "error": res2})
 
     renamed = []
+    z2m_ok = {i["device_id"] for i in items if i["device_id"] in done and i.get("source") == "z2m" and z2m_mode}
     ids_by_entity = {e["entity_id"]: e.get("device_id") for e in entities}
     changes = [c for c in changes if ids_by_entity.get(c["old"]) not in failed_ids]  # nichts ändern, wenn Z2M nicht umbenannt hat
+    # Z2M benennt mit homeassistant_rename die Entity-IDs ggf. selbst um: kurz abwarten, dann nur Fehlendes selbst erledigen
+    fresh = {e["entity_id"] for e in entities}
+    if z2m_ok and changes:
+        prog(pid, "Warte auf Zigbee2MQTT (Entity-IDs) …", 0)
+        for _ in range(4):
+            await asyncio.sleep(1.5)
+            fresh = {e["entity_id"] for e in (await ha([{"type": "config/entity_registry/list"}]))[0]}
+            if all(c["new"] in fresh or ids_by_entity.get(c["old"]) not in z2m_ok for c in changes):
+                break
     for ch in changes:
         prog(pid, f"Entity-ID: {ch['old']}")
+        if ch["new"] in fresh and ch["old"] not in fresh:
+            renamed.append(ch)  # hat Zigbee2MQTT bereits umbenannt
+            continue
         ok, res = await ha_try({"type": "config/entity_registry/update",
                                 "entity_id": ch["old"], "new_entity_id": ch["new"]})
         (renamed.append(ch) if ok else errors.append({"device": ch["old"], "error": res}))
