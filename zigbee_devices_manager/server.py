@@ -330,6 +330,23 @@ async def resolve_areas(body, items):
     return out
 
 
+async def create_missing_areas(targets, errors):
+    """Legt fehlende Bereiche in Home Assistant an (einmal je Name) und trägt die neuen IDs in die Ziele ein."""
+    created = {}
+    for tgt in targets.values():
+        if not tgt["create"]:
+            continue
+        key = tgt["name"].lower()
+        if key not in created:
+            ok, res = await ha_try({"type": "config/area_registry/create", "name": tgt["name"]})
+            if ok:
+                created[key] = res["area_id"]
+            else:
+                errors.append({"device": f"Bereich {tgt['name']}", "error": res})
+        tgt["id"] = created.get(key, "")
+    return created
+
+
 async def plan(request):
     body = await request.json()
     items = parse_request(body)
@@ -354,7 +371,7 @@ async def verify_changes(items, renamed, opts, wait=True):
     """Prüft nach dem Umbenennen, ob Geräte, Entity-IDs und Verweise wirklich angepasst sind."""
     checks = []
     # 1. Gerätenamen (Zigbee2MQTT bestätigt asynchron, daher kurz warten)
-    deadline = time.monotonic() + (15 if wait else 0)
+    deadline = time.monotonic() + (15 if wait and not opts.get("skip_names") else 0)
     while True:
         devices = (await ha([{"type": "config/device_registry/list"}]))[0]
         by_id = {d["id"]: d for d in devices}
@@ -363,7 +380,9 @@ async def verify_changes(items, renamed, opts, wait=True):
         if not wrong or time.monotonic() >= deadline:
             break
         await asyncio.sleep(1.5)
-    if not wrong:
+    if opts.get("skip_names"):
+        pass
+    elif not wrong:
         checks.append(check("Gerätenamen", "ok", f"{len(items)} Gerät(e) heißen jetzt wie geplant"))
     else:
         names = ", ".join(it["name"] for it in wrong)
@@ -413,6 +432,30 @@ async def verify_changes(items, renamed, opts, wait=True):
     return checks
 
 
+async def assign_area(request):
+    """Ordnet Geräte nur einem Bereich (Raum) zu – ohne sie umzubenennen."""
+    body = await request.json()
+    body["set_area"] = True
+    items = parse_request(body)
+    if not items:
+        raise web.HTTPBadRequest(text="Keine Geräte angegeben")
+    errors, done = [], []
+    targets = await resolve_areas(body, items)
+    await create_missing_areas(targets, errors)
+    for it in items:
+        tgt = targets.get(it["device_id"])
+        if not tgt or not tgt["id"]:
+            continue
+        ok, res = await ha_try({"type": "config/device_registry/update", "device_id": it["device_id"], "area_id": tgt["id"]})
+        if ok:
+            it["area_id"] = tgt["id"]
+            done.append(it["device_id"])
+        else:
+            errors.append({"device": it["name"], "error": res})
+    checks = await verify_changes([i for i in items if i["device_id"] in done], [], {"set_area": True, "skip_names": True}, wait=False)
+    return web.json_response({"ok": not errors, "checks": checks, "errors": errors, "items": items, "areas_set": len(done)})
+
+
 async def verify(request):
     body = await request.json()
     items = parse_request(body)
@@ -437,16 +480,7 @@ async def apply(request):
     entities = (await ha([{"type": "config/entity_registry/list"}]))[0] if z2m_mode else []
     changes, skipped = entity_changes(items, entities) if z2m_mode else ([], [])
     targets = await resolve_areas(body, items)
-    created = {}
-    for tgt in targets.values():  # fehlende Bereiche in Home Assistant anlegen (einmal je Name)
-        if tgt["create"] and tgt["name"].lower() not in created:
-            ok, res = await ha_try({"type": "config/area_registry/create", "name": tgt["name"]})
-            if ok:
-                created[tgt["name"].lower()] = res["area_id"]
-            else:
-                errors.append({"device": f"Bereich {tgt['name']}", "error": res})
-        if tgt["create"]:
-            tgt["id"] = created.get(tgt["name"].lower(), "")
+    await create_missing_areas(targets, errors)
     for it in items:
         tgt = targets.get(it["device_id"])
         if tgt and tgt["id"]:
@@ -586,6 +620,7 @@ def make_app():
         web.post("/api/plan", plan),
         web.post("/api/apply", apply),
         web.post("/api/verify", verify),
+        web.post("/api/assign_area", assign_area),
     ])
     return app
 

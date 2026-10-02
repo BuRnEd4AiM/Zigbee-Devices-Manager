@@ -195,9 +195,9 @@ const api = {
     const r = await fetch("api/store", {method: "PUT", body: JSON.stringify(store)});
     if (!r.ok) throw new Error(await r.text());
   },
-  payload(list) {
+  payload(list, forceArea = false) {
     return list.map(([d, name]) => ({device_id: d.id, name, old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || "zigbee2mqtt",
-      ...(S.setArea && roomOf(d) ? {area_id: roomOf(d).area_id || "", area_name: roomOf(d).name, current_area_id: d.area_id || "", current_area: d.area || ""} : {})}));
+      ...((S.setArea || forceArea) && roomOf(d) ? {area_id: roomOf(d).area_id || "", area_name: roomOf(d).name, current_area_id: d.area_id || "", current_area: d.area || ""} : {})}));
   },
   opts() { const on = S.renameEntities; return {set_area: S.setArea, rename_entities: on, update_references: on && S.updateRefs, update_yaml: on && S.updateYaml, update_nodered: on && S.updateNodered}; },
   async post(path, body) {
@@ -234,6 +234,20 @@ const api = {
   async permitState() {
     if (this.demo) return {};
     const r = await fetch("api/permit_state"); return r.ok ? r.json() : {};
+  },
+  /** Nur Bereiche zuweisen (ohne Umbenennen): Vorschau und Ausführung. */
+  async planAreas(list) {
+    const items = this.payload(list, true);
+    if (this.demo) return {entities: [], skipped: [], usages: [], unreadable: 0, notes: [], areas: items.filter(i => i.area_name && i.area_name !== i.current_area).map(i => ({device: i.name, from: i.current_area, to: i.area_name, create: !i.area_id}))};
+    return this.post("api/plan", {items, set_area: true});
+  },
+  async assignAreas(list) {
+    const items = this.payload(list, true);
+    if (this.demo) {
+      const res = {ok: true, errors: [], items: items.map(i => ({...i, area_id: i.area_id || "area_" + i.area_name.toLowerCase()})), areas_set: items.length};
+      res.checks = [{name: "Bereiche (Räume)", status: "ok", detail: "Beispiel: Geräte sind dem gewählten Bereich zugeordnet"}]; return res;
+    }
+    return this.post("api/assign_area", {items});
   },
   async verify(last) {
     if (this.demo) return {checks: this.demoChecks(last)};
@@ -357,6 +371,7 @@ function renderDevices() {
       <select id="bRoom">${roomOpts("")}</select>
       <select id="bType">${typeOpts("")}</select>
       <button class="btn" id="bAssign" ${S.sel.size ? "" : "disabled"}>Zuweisen</button>
+      <button class="btn" id="bArea" ${S.sel.size ? "" : "disabled"} title="Ordnet die ausgewählten Geräte ihrem gewählten Raum in Home Assistant zu – ohne sie umzubenennen">Raum in HA setzen</button>
       <span style="flex:1"></span>
       <label class="sub" title="Ordnet das Gerät in Home Assistant dem gewählten Raum (Bereich) zu; fehlende Bereiche werden angelegt"><input type="checkbox" id="rArea" ${S.setArea ? "checked" : ""}> Raum als Bereich in HA setzen</label>
       <label class="sub" title="Zigbee2MQTT-Geräte werden direkt in Z2M umbenannt. Entity-IDs, die den alten Namen enthalten, werden angepasst."><input type="checkbox" id="rEnt" ${S.renameEntities ? "checked" : ""}> Entity-IDs mitziehen (Z2M: dort umbenennen)</label>
@@ -376,7 +391,7 @@ function renderDevices() {
         return `<tr data-id="${d.id}">
           <td><input type="checkbox" class="sel" ${S.sel.has(d.id) ? "checked" : ""}></td>
           <td class="name" title="Klicken zum Bearbeiten">${nameCell}</td>
-          <td>${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}</td>
+          <td>${!d.planned && r && r.id !== undefined && (r.area_id ? r.area_id !== d.area_id : r.name.toLowerCase() !== (d.area || "").toLowerCase()) ? `<button class="btn setArea" title="Nur den Raum in Home Assistant setzen, Name bleibt">Raum setzen</button> ` : ""}${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}</td>
           ${multiGw ? `<td class="sub">${esc(d.planned ? "" : gwLabel(d.bridge))}</td>` : ""}
           <td><select class="house">${houseOpts(houseOf(d)?.id)}</select></td>
           <td><select class="floor">${floorOpts(floorOf(d)?.id)}</select></td>
@@ -406,6 +421,7 @@ function renderDevices() {
     const name = prompt("Name des geplanten Geräts (wird reserviert, damit die Nummer nicht doppelt vergeben wird):");
     if (name?.trim()) { S.planned.push({id: uid("p_"), name: name.trim()}); persist(); renderDevices(); }
   };
+  $("#bArea", root).onclick = () => assignAreas(rows.filter(d => S.sel.has(d.id)));
   $("#bAssign", root).onclick = () => {
     const room = $("#bRoom", root).value, type = $("#bType", root).value, house = $("#bHouse", root)?.value, floor = $("#bFloor", root)?.value;
     S.sel.forEach(id => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type}), ...(house && {house}), ...(floor && {floor})}; });
@@ -422,6 +438,7 @@ function renderDevices() {
     $(".floor", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], floor: e.target.value}; persist(); renderDevices(); };
     $(".room", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], room: e.target.value}; persist(); renderDevices(); };
     $(".type", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], type: e.target.value}; persist(); renderDevices(); };
+    $(".setArea", tr) && ($(".setArea", tr).onclick = () => assignAreas([d]));
     $(".apply", tr) && ($(".apply", tr).onclick = async () => { if (await applyBatch([[d, sug.get(d.id)]])) toast("Name übernommen"); renderDevices(); });
     $(".delP", tr) && ($(".delP", tr).onclick = () => { S.planned = S.planned.filter(p => p.id !== d.id); persist(); renderDevices(); });
     $(".name", tr).onclick = () => { if (S.editing !== d.id) { S.editing = d.id; renderDevices(); const i = $("#edit"); i.focus(); i.select(); } };
@@ -441,16 +458,16 @@ function renderDevices() {
 }
 
 /** Zeigt die geplanten Änderungen und wartet auf Bestätigung. */
-function confirmPlan(plan, count) {
+function confirmPlan(plan, count, areaOnly = false) {
   return new Promise(resolve => {
     const kinds = {automation: "Automation", script: "Skript", scene: "Szene", dashboard: "Dashboard", yaml: "YAML", nodered: "Node-RED"};
-    const refs = S.updateRefs || S.updateYaml || S.updateNodered;
+    const refs = !areaOnly && (S.updateRefs || S.updateYaml || S.updateNodered);
     const dlg = document.createElement("dialog");
     dlg.style.cssText = "max-width:640px;width:92%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
-    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${count} Gerät(e) umbenennen</h2>
+    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${count} Gerät(e) ${areaOnly ? "einem Raum zuweisen" : "umbenennen"}</h2>
       ${(plan.areas || []).length ? `<p class="sub">Bereich in Home Assistant (${plan.areas.length}):</p>
       <div class="preview" style="max-height:140px;overflow:auto">${plan.areas.map(a => `${esc(a.device)}: ${esc(a.from || "–")} → <b>${esc(a.to)}</b>${a.create ? ` <span class="sub">(wird neu angelegt)</span>` : ""}`).join("<br>")}</div>` : ""}
-      ${S.renameEntities ? `<p class="sub" style="margin-top:12px">Entity-IDs, die sich ändern (${plan.entities.length}):</p>
+      ${!areaOnly && S.renameEntities ? `<p class="sub" style="margin-top:12px">Entity-IDs, die sich ändern (${plan.entities.length}):</p>
       <div class="preview" style="max-height:160px;overflow:auto">${plan.entities.map(e => `${esc(e.old)} → <b>${esc(e.new)}</b>`).join("<br>") || "keine"}</div>` : ""}
       ${plan.skipped.length ? `<p class="sub">Übersprungen: ${plan.skipped.map(s => esc(s.old) + " (" + esc(s.reason) + ")").join(", ")}</p>` : ""}
       ${refs ? `<p class="sub" style="margin-top:12px">Verweise, die angepasst werden (${plan.usages.length}):</p>
@@ -460,12 +477,37 @@ function confirmPlan(plan, count) {
       ${S.updateNodered ? `<p class="sub">Node-RED danach neu starten, sonst überschreibt ein Deploy die Änderung.</p>` : ""}
       ${S.updateYaml ? `<p class="sub">YAML geändert: danach Konfiguration prüfen und neu laden.</p>` : ""}
       <p class="sub">Vorher wird eine Sicherung der geänderten Konfigurationen unter /data/backups abgelegt.</p>` : ""}
-      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="no">Abbrechen</button><button class="btn primary" id="yes">Umbenennen</button></div>`;
+      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="no">Abbrechen</button><button class="btn primary" id="yes">${areaOnly ? "Zuweisen" : "Umbenennen"}</button></div>`;
     document.body.appendChild(dlg); dlg.showModal();
     const end = v => { dlg.close(); dlg.remove(); resolve(v); };
     $("#no", dlg).onclick = () => end(false); $("#yes", dlg).onclick = () => end(true);
     dlg.oncancel = () => end(false);
   });
+}
+
+/** Bereich lokal nachziehen; neu angelegte Bereiche mit dem Raum verknüpfen. */
+function adoptAreas(items) {
+  for (const it of items || []) {
+    const dev = S.devices.find(x => x.id === it.device_id); if (!dev || !it.area_id) continue;
+    const room = roomOf(dev); dev.area_id = it.area_id; dev.area = room?.name || dev.area;
+    if (room && !room.area_id) { room.area_id = it.area_id; S.areas.push({id: it.area_id, name: room.name, floor_id: ""}); }
+  }
+  persist();
+}
+
+/** Weist Geräte ihrem gewählten Raum als Bereich in Home Assistant zu – ohne Umbenennen. */
+async function assignAreas(devs) {
+  const list = devs.filter(d => !d.planned && roomOf(d)).map(d => [d, d.name]);
+  if (!list.length) { toast("Kein Gerät mit gewähltem Raum"); return; }
+  try {
+    const plan = await api.planAreas(list);
+    if (!plan.areas?.length) { toast("Alle gewählten Geräte sind schon im richtigen Bereich"); return; }
+    if (!await confirmPlan(plan, plan.areas.length, true)) return;
+    const res = await api.assignAreas(list);
+    adoptAreas(res.items);
+    await showChecks(res.checks || [], {items: res.items, renamed: [], opts: {set_area: true, skip_names: true}}, res.errors || []);
+  } catch (e) { toast("Fehler: " + e.message); }
+  renderDevices();
 }
 
 /** Zeigt das Prüfergebnis nach dem Umbenennen; „Erneut prüfen“ liest den aktuellen Stand neu. */
@@ -501,11 +543,7 @@ async function applyBatch(items) {
         if ((S.renameEntities || plan.areas?.length) && !await confirmPlan(plan, real.length)) return 0;
       }
       const res = await api.apply(real);
-      for (const it of res.items || []) { // Bereich lokal nachziehen, neue Bereiche mit dem Raum verknüpfen
-        const dev = S.devices.find(x => x.id === it.device_id); if (!dev || !it.area_id) continue;
-        const room = roomOf(dev); dev.area_id = it.area_id; dev.area = room?.name || dev.area;
-        if (room && !room.area_id) { room.area_id = it.area_id; S.areas.push({id: it.area_id, name: room.name, floor_id: ""}); }
-      }
+      adoptAreas(res.items);
       for (const [d, name] of real) { const dev = S.devices.find(x => x.id === d.id); dev.name = name; dev.is_new = false; }
       if (res.errors?.length) toast("Fehler: " + res.errors.map(e => e.device + ": " + e.error).join("; "));
       await showChecks(res.checks || [], {items: res.items || api.payload(real), renamed: res.renamed_entities || [], opts: api.opts()}, res.errors || []);
