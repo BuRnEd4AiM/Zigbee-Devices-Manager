@@ -204,9 +204,22 @@ const api = {
   async apply(list) {
     if (this.demo) {
       try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); list.forEach(([d, name]) => n[d.id] = name); localStorage.setItem("zdm-demo-names", JSON.stringify(n)); } catch (e) {}
-      return {ok: true, errors: [], renamed_entities: [], updated_references: []};
+      const res = {ok: true, errors: [], renamed_entities: [], updated_references: []};
+      res.checks = this.demoChecks({items: list, opts: this.opts()});
+      return res;
     }
     return this.post("api/apply", {items: this.payload(list), ...this.opts()});
+  },
+  async verify(last) {
+    if (this.demo) return {checks: this.demoChecks(last)};
+    return this.post("api/verify", {items: last.items, renamed: last.renamed, ...last.opts});
+  },
+  demoChecks(last) {
+    const o = last.opts, c = [{name: "Gerätenamen", status: "ok", detail: last.items.length + " Gerät(e) heißen jetzt wie geplant"}];
+    if (o.rename_entities) c.push({name: "Entity-IDs", status: "ok", detail: "Beispiel: alte IDs gibt es nicht mehr"});
+    if (o.update_references || o.update_yaml || o.update_nodered) c.push({name: "Verweise", status: "ok", detail: "Beispiel: keine alten Entity-IDs mehr gefunden"});
+    if (o.update_nodered) c.push({name: "Node-RED", status: "info", detail: "Node-RED jetzt neu starten"});
+    return c;
   }
 };
 
@@ -367,6 +380,28 @@ function confirmPlan(plan, count) {
   });
 }
 
+/** Zeigt das Prüfergebnis nach dem Umbenennen; „Erneut prüfen“ liest den aktuellen Stand neu. */
+function showChecks(checks, last, errors) {
+  return new Promise(resolve => {
+    const icon = {ok: "✅", info: "ℹ️", warn: "⚠️", fail: "❌"};
+    const dlg = document.createElement("dialog");
+    dlg.style.cssText = "max-width:680px;width:92%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
+    const draw = list => {
+      const bad = list.some(c => c.status === "fail") || errors.length, warn = list.some(c => c.status === "warn");
+      dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${bad ? "❌ Prüfung: nicht alles hat geklappt" : warn ? "⚠️ Prüfung: bitte nachsehen" : "✅ Prüfung: alles wurde angepasst"}</h2>
+        <div class="preview" style="line-height:1.6">${list.map(c => `${icon[c.status] || "•"} <b>${esc(c.name)}</b><div class="sub" style="margin:0 0 6px 24px">${esc(c.detail)}</div>`).join("") || "Keine Prüfung verfügbar."}
+        ${errors.map(e => `❌ <b>${esc(e.device)}</b><div class="sub" style="margin:0 0 6px 24px">${esc(e.error)}</div>`).join("")}</div>
+        <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="re">Erneut prüfen</button><button class="btn primary" id="ok">Schließen</button></div>`;
+      $("#ok", dlg).onclick = () => { dlg.close(); dlg.remove(); resolve(); };
+      $("#re", dlg).onclick = async () => {
+        $("#re", dlg).disabled = true; $("#re", dlg).textContent = "Prüfe…";
+        try { draw((await api.verify(last)).checks); } catch (e) { toast("Prüfung fehlgeschlagen: " + e.message); draw(list); }
+      };
+    };
+    draw(checks); document.body.appendChild(dlg); dlg.showModal(); dlg.oncancel = () => { dlg.remove(); resolve(); };
+  });
+}
+
 /** items: [[device, neuerName], …]. Gibt die Anzahl umbenannter Geräte zurück. */
 async function applyBatch(items) {
   const real = items.filter(([d]) => !d.planned);
@@ -378,8 +413,9 @@ async function applyBatch(items) {
         if (!await confirmPlan(plan, real.length)) return 0;
       }
       const res = await api.apply(real);
+      for (const [d, name] of real) { const dev = S.devices.find(x => x.id === d.id); dev.name = name; dev.is_new = false; }
       if (res.errors?.length) toast("Fehler: " + res.errors.map(e => e.device + ": " + e.error).join("; "));
-      else if (res.updated_references?.length) toast(res.updated_references.length + " Verweise angepasst");
+      await showChecks(res.checks || [], {items: api.payload(real), renamed: res.renamed_entities || [], opts: api.opts()}, res.errors || []);
     } catch (e) { toast("Fehler: " + e.message); return 0; }
     for (const [d, name] of real) { const dev = S.devices.find(x => x.id === d.id); dev.name = name; dev.is_new = false; }
   }

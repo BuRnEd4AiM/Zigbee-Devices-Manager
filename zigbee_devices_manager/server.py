@@ -1,4 +1,5 @@
 """Backend des Zigbee Devices Manager (Home Assistant Add-on, Ingress)."""
+import asyncio
 import json
 import os
 import re
@@ -253,6 +254,74 @@ async def plan(request):
                               "unreadable": unreadable, "notes": notes})
 
 
+def check(name, status, detail=""):
+    return {"name": name, "status": status, "detail": detail}
+
+
+async def verify_changes(items, renamed, opts, wait=True):
+    """Prüft nach dem Umbenennen, ob Geräte, Entity-IDs und Verweise wirklich angepasst sind."""
+    checks = []
+    # 1. Gerätenamen (Zigbee2MQTT bestätigt asynchron, daher kurz warten)
+    deadline = time.monotonic() + (15 if wait else 0)
+    while True:
+        devices = (await ha([{"type": "config/device_registry/list"}]))[0]
+        by_id = {d["id"]: d for d in devices}
+        wrong = [it for it in items
+                 if (by_id.get(it["device_id"], {}).get("name_by_user") or by_id.get(it["device_id"], {}).get("name")) != it["name"]]
+        if not wrong or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(1.5)
+    if not wrong:
+        checks.append(check("Gerätenamen", "ok", f"{len(items)} Gerät(e) heißen jetzt wie geplant"))
+    else:
+        names = ", ".join(it["name"] for it in wrong)
+        z2m = any(it.get("source") == "z2m" and opts.get("rename_entities") for it in wrong)
+        checks.append(check("Gerätenamen", "warn" if z2m else "fail",
+                            f"Noch nicht übernommen: {names}" + (
+                                " – Zigbee2MQTT hat die Umbenennung noch nicht bestätigt (Basis-Topic und Z2M-Log prüfen, später erneut prüfen)" if z2m else "")))
+    # 2. Entity-IDs
+    if renamed:
+        existing = {e["entity_id"] for e in (await ha([{"type": "config/entity_registry/list"}]))[0]}
+        missing = [c["new"] for c in renamed if c["new"] not in existing]
+        still_old = [c["old"] for c in renamed if c["old"] in existing]
+        if missing or still_old:
+            checks.append(check("Entity-IDs", "fail", "; ".join(filter(None, [
+                f"Neue ID fehlt: {', '.join(missing)}" if missing else "",
+                f"Alte ID existiert noch: {', '.join(still_old)}" if still_old else ""]))))
+        else:
+            checks.append(check("Entity-IDs", "ok", f"{len(renamed)} Entity-ID(s) umbenannt, alte IDs gibt es nicht mehr"))
+    elif opts.get("rename_entities"):
+        checks.append(check("Entity-IDs", "info", "Keine Entity-ID musste geändert werden"))
+    # 3. Verweise
+    wants_refs = opts.get("update_references") or opts.get("update_yaml") or opts.get("update_nodered")
+    if renamed and wants_refs:
+        usages, unreadable, notes = await collect_usages(opts, {c["old"]: c["new"] for c in renamed})
+        if usages:
+            checks.append(check("Verweise", "fail", "Alte Entity-IDs kommen noch vor in: " + "; ".join(
+                f"{u['kind']} {u['title']} ({', '.join(u['entities'])})" for u in usages)))
+        else:
+            parts = [k for k, on in (("Automationen/Skripte/Szenen/Dashboards", opts.get("update_references")),
+                                     ("YAML-Dateien", opts.get("update_yaml")), ("Node-RED-Flows", opts.get("update_nodered"))) if on]
+            checks.append(check("Verweise", "ok", "Keine alten Entity-IDs mehr gefunden in: " + ", ".join(parts)))
+        if unreadable:
+            checks.append(check("Nicht prüfbar", "warn", f"{unreadable} Automationen/Szenen sind nicht über die Oberfläche lesbar (YAML-Include) und wurden nicht geprüft"))
+        checks += [check("Hinweis", "warn", n) for n in notes]
+        if opts.get("update_nodered"):
+            checks.append(check("Node-RED", "info", "Dateien sind angepasst. Node-RED jetzt neu starten – das Add-on kann den Deploy-Stand nicht prüfen"))
+        if opts.get("update_yaml"):
+            checks.append(check("YAML", "info", "Dateien sind angepasst. Konfiguration prüfen und neu laden (Entwicklerwerkzeuge → YAML)"))
+    elif renamed:
+        checks.append(check("Verweise", "info", "Nicht geprüft/angepasst (Haken aus). Automationen mit alten IDs laufen ins Leere"))
+    return checks
+
+
+async def verify(request):
+    body = await request.json()
+    items = parse_request(body)
+    renamed = [c for c in body.get("renamed", []) if c.get("old") and c.get("new")]
+    return web.json_response({"checks": await verify_changes(items, renamed, body, wait=False)})
+
+
 async def ha_try(cmd):
     try:
         return True, (await ha([cmd]))[0]
@@ -333,7 +402,8 @@ async def apply(request):
                     changed_refs.append({"kind": it["kind"], "title": it["title"]})
                 else:
                     errors.append({"device": f"{it['kind']} {it['title']}", "error": res})
-    return web.json_response({"ok": not errors, "renamed_devices": done, "renamed_entities": renamed,
+    checks = await verify_changes(items, renamed, body) if not body.get("skip_verify") else []
+    return web.json_response({"ok": not errors, "checks": checks, "renamed_devices": done, "renamed_entities": renamed,
                               "skipped": skipped, "updated_references": changed_refs,
                               "unreadable": unreadable, "notes": notes, "errors": errors})
 
@@ -350,6 +420,7 @@ def make_app():
         web.put("/api/store", put_store),
         web.post("/api/plan", plan),
         web.post("/api/apply", apply),
+        web.post("/api/verify", verify),
     ])
     return app
 
