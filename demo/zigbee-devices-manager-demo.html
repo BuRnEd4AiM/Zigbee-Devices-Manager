@@ -14,7 +14,7 @@ header h1{font-size:17px;margin:0;font-weight:600}
 nav{display:flex;gap:4px;margin-left:auto}
 nav button{background:none;border:0;color:var(--muted);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit}
 nav button.on{background:var(--chip);color:var(--fg);font-weight:600}
-main{padding:16px;max-width:1300px;margin:0 auto}
+main{padding:16px;width:100%}
 .banner{background:var(--chip);border:1px solid var(--line);border-left:4px solid var(--warn);padding:8px 12px;border-radius:6px;margin-bottom:12px;color:var(--muted)}
 .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
 input,select,button{font:inherit;color:var(--fg)}
@@ -29,10 +29,14 @@ button:disabled{opacity:.45;cursor:default}
 .chips button.on{background:var(--accent);color:var(--accent-fg)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:auto}
 table{border-collapse:collapse;width:100%}
-th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
 th{font-size:12px;color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--card)}
 tr:last-child td{border-bottom:0}
-td.name{cursor:text;font-weight:600;min-width:180px}
+td.name{cursor:text;font-weight:600;min-width:150px;word-break:break-word}
+#tab-devices table{table-layout:auto;width:100%}
+#tab-devices td select{width:100%;min-width:125px;max-width:100%}
+#tab-devices td code{word-break:break-all}
+.card{overflow-x:auto}
 td.name:hover{text-decoration:underline dotted}
 td.name input{width:100%;font-weight:600}
 .sub{color:var(--muted);font-size:12px;font-weight:400}
@@ -53,6 +57,8 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 .x{background:none;border:0;color:var(--muted);cursor:pointer;font-size:16px}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s}
 .toast.show{opacity:1}
+@media(max-width:1250px){.hide-m{display:none}}
+@media(max-width:1050px){.hide-l{display:none}}
 @media(max-width:700px){.hide-s{display:none}}
 </style>
 </head>
@@ -328,7 +334,7 @@ function renderDevices() {
     </div>
     <div class="card"><table>
       <thead><tr><th><input type="checkbox" id="selAll" ${rows.length && rows.every(d => S.sel.has(d.id)) ? "checked" : ""}></th>
-        <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Gateway</th>" : ""}<th>Haus</th><th>Raum</th><th>Typ</th><th class="hide-s">Gerät</th><th class="hide-s">IEEE</th><th>Status</th><th></th></tr></thead>
+        <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Gateway</th>" : ""}<th>Haus</th><th>Raum</th><th>Typ</th><th class="hide-s hide-l">Gerät</th><th class="hide-s hide-m">IEEE</th><th>Status</th><th></th></tr></thead>
       <tbody>${rows.map(d => {
         const s = sug.get(d.id), r = roomOf(d), t = typeOf(d);
         const nameCell = S.editing === d.id
@@ -342,8 +348,8 @@ function renderDevices() {
           <td><select class="house">${houseOpts(houseOf(d)?.id)}</select></td>
           <td><select class="room">${roomOpts(r?.id)}</select></td>
           <td><select class="type">${typeOpts(t?.id)}</select></td>
-          <td class="hide-s">${esc(d.manufacturer)}<div class="sub">${esc(d.model || d.orig_name)}</div></td>
-          <td class="hide-s"><code>${esc(d.ieee || "–")}</code></td>
+          <td class="hide-s hide-l">${esc(d.manufacturer)}<div class="sub">${esc(d.model || d.orig_name)}</div></td>
+          <td class="hide-s hide-m"><code>${esc(d.ieee || "–")}</code></td>
           <td><span class="badge ${d.planned ? "plan" : d.is_new ? "new" : "ok"}">${d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}</span></td>
           <td>${s && s !== d.name ? `<button class="btn apply">Übernehmen</button>` : ""}${d.planned ? `<button class="x delP" title="Entfernen">✕</button>` : ""}</td>
         </tr>`;
