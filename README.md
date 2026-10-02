@@ -17,6 +17,7 @@ Namensschema vergibst.
   - Zähler arabisch (`01`), römisch (`III`) oder Buchstaben (`C`)
   - GROSS / klein / wie eingegeben
 - **Etagen:** Token `{floor}` für Stockwerke (z. B. H0 = Erdgeschoss, H1 = 1. Etage, H2, H3 … oder S2/S3 – Kürzel frei wählbar). Etagen aus Home Assistant werden übernommen; die Etage eines Geräts ergibt sich aus Raum/HA-Bereich, lässt sich aber je Gerät oder per Mehrfachauswahl überschreiben. Beispiel: `{floor}-{room}-{type}{nr}` → `H1-wzfl-lband01`. Haus und Etage lassen sich kombinieren.
+- **Haus-Buchstabe + Etage (H0, H1, S2 …):** Haus = Buchstabe (H, S), Etage = Nummer (0 = EG, 1, 2, 3 …); Muster `{house}{floor}-{room}-{type}{nr}` → `H1-wzfl-lband01`, `S2-wzfl-lband01`. Im Schema-Tab setzt „H0, H1, S2 …“ diese Voreinstellung mit einem Klick. Je Gateway lässt sich ein Haus festlegen, die Etage kommt aus Raum/HA-Bereich.
 - **Räume aus Home Assistant:** Alle Bereiche aus HA werden automatisch als Räume übernommen (Kürzel wird vorgeschlagen und ist editierbar), Geräte bekommen ihren HA-Bereich als Raum vorgewählt. „⟳ Bereiche aus HA“ im Schema-Tab gleicht neu ab; gelöschte Räume kommen nicht von allein zurück.
 - **Haus-Präfix:** Muster mit `{house}`, z. B. `{house}-{room}-{type}{nr}` → `H1-wzfl-lband01`. Häuser, Räume und Typen mit eigenen Kürzeln (Groß-/Kleinschreibung wählbar), Standard-Haus plus Auswahl je Gerät
 - Mehrfachauswahl → Raum/Typ zuweisen → „Vorschläge übernehmen“
