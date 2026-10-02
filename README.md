@@ -16,6 +16,7 @@ Namensschema vergibst.
   - Automatisches Hochzählen je Raum+Typ, überspringt belegte Namen
   - Zähler arabisch (`01`), römisch (`III`) oder Buchstaben (`C`)
   - GROSS / klein / wie eingegeben
+- **Räume aus Home Assistant:** Alle Bereiche aus HA werden automatisch als Räume übernommen (Kürzel wird vorgeschlagen und ist editierbar), Geräte bekommen ihren HA-Bereich als Raum vorgewählt. „⟳ Bereiche aus HA“ im Schema-Tab gleicht neu ab; gelöschte Räume kommen nicht von allein zurück.
 - **Haus-Präfix:** Muster mit `{house}`, z. B. `{house}-{room}-{type}{nr}` → `H1-wzfl-lband01`. Häuser, Räume und Typen mit eigenen Kürzeln (Groß-/Kleinschreibung wählbar), Standard-Haus plus Auswahl je Gerät
 - Mehrfachauswahl → Raum/Typ zuweisen → „Vorschläge übernehmen“
 - **Prüfung nach dem Umbenennen:** Das Add-on liest den Stand aus Home Assistant neu ein und zeigt ✅/⚠️/❌ für Gerätenamen (bei Z2M mit bis zu 15 s Wartezeit), Entity-IDs und verbliebene alte Verweise in Automationen, YAML und Node-RED. „Erneut prüfen“ liest erneut nach.
