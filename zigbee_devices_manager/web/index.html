@@ -264,7 +264,7 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameEntities: false, setArea: true, updateRefs: true, updateYaml: false, updateNodered: false};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameEntities: false, setArea: true, updateRefs: true, updateYaml: false, updateNodered: false};
 
 function persist() {
   clearTimeout(persist.t);
@@ -509,6 +509,23 @@ async function runWithProgress(title, fn) {
   finally { clearInterval(timer); set(1, 1, "Fertig"); dlg.close(); dlg.remove(); }
 }
 
+/** Erkennt die Zigbee2MQTT-Basis-Topics über MQTT und trägt sie bei den Gateways ein (nur wenn noch leer). Gibt die Zahl neuer Einträge zurück. */
+async function detectBases() {
+  if (api.demo) return 0;
+  let found; try { found = await (await fetch("api/z2m_bases")).json(); } catch (e) { return 0; }
+  if (!Array.isArray(found)) return 0;
+  S.z2mBases = found; let n = 0;
+  const z2m = S.bridges.filter(b => b.source === "z2m");
+  for (const b of z2m) {
+    const g = S.gateways[b.id] || (S.gateways[b.id] = {});
+    if (g.topic) continue;
+    const hit = found.find(f => f.ieee && b.ieee && f.ieee.toLowerCase() === b.ieee.toLowerCase()) || (found.length === 1 && z2m.length === 1 ? found[0] : null);
+    if (hit) { g.topic = hit.base_topic; n++; }
+  }
+  if (n) persist();
+  return n;
+}
+
 /** Liest Geräte, Bereiche und Etagen frisch aus Home Assistant, damit die Liste den echten Stand zeigt. */
 async function refreshFromHA(quiet = false) {
   if (api.demo) return;
@@ -594,6 +611,7 @@ async function applyBatch(items) {
 function renderGateways() {
   const houseOpts = sel => `<option value="">– Standard-Haus –</option>` + S.scheme.houses.map(h => `<option value="${h.id}"${h.id === sel ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("");
   $("#tab-gateways").innerHTML = `<div class="panel" style="margin-bottom:16px"><h2>Gateways</h2>
+    <p class="sub" id="basesHint">${S.z2mBases.length ? "Gefundene Zigbee2MQTT-Basis-Topics: <code>" + S.z2mBases.map(b => esc(b.base_topic)).join("</code>, <code>") + "</code>" : ""} <button class="btn" id="detect">Basis-Topics erkennen</button></p>
     <p class="sub">Je Gateway (Zigbee2MQTT-Instanz oder ZHA) kannst du einen Namen, den MQTT-Basis-Topic und ein Haus festlegen. Das Haus gilt für alle Geräte dieses Gateways, solange du beim Gerät nichts anderes wählst. „Anlernen“ öffnet das Netz für neue Geräte.</p>
     <div class="card"><table><thead><tr><th>Gateway</th><th>Bezeichnung</th><th>Basis-Topic</th><th>Haus</th><th>Geräte</th><th>Anlernen</th></tr></thead><tbody>
     ${S.bridges.map(b => { const g = S.gateways[b.id] || {};
@@ -605,6 +623,7 @@ function renderGateways() {
         <td><span class="badge" data-cd="${esc(b.id)}"></span> <button class="btn pj" data-t="240">4 Min anlernen</button> <button class="btn pj" data-t="0">Stopp</button></td></tr>`; }).join("") || `<tr><td colspan="6" class="empty">Keine Gateways gefunden.</td></tr>`}
     </tbody></table></div></div>`;
   const root = $("#tab-gateways");
+  $("#detect", root).onclick = async () => { const n = await detectBases(); toast(n ? n + " Basis-Topic(s) erkannt" : (S.z2mBases.length ? "Keine neuen Zuordnungen (Topics siehe oben, im Feld eintragen)" : "Keine Zigbee2MQTT-Instanz über MQTT gefunden")); renderGateways(); };
   root.querySelectorAll("tr[data-b]").forEach(tr => {
     const id = tr.dataset.b, b = S.bridges.find(x => x.id === id);
     const set = (k, v) => { S.gateways[id] = {...S.gateways[id], [k]: v}; persist(); };
@@ -742,6 +761,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   S.scheme.floors = S.scheme.floors || clone(DEFAULT_SCHEME.floors); S.scheme.defaultFloor = S.scheme.defaultFloor || "";
   syncFloors(); syncAreas();
   renderDevices();
+  detectBases().then(n => { if (n) { toast(n + " Z2M-Basis-Topic(s) erkannt"); } });
 })();
 </script>
 </body>

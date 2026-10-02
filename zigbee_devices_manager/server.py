@@ -115,7 +115,9 @@ async def get_state(request):
     out, bridges = [], {}
     for d in devices:
         if any(dom == "mqtt" and ident.startswith("zigbee2mqtt_bridge_") for dom, ident in d.get("identifiers", [])):
-            bridges[d["id"]] = {"id": d["id"], "source": "z2m", "name": d.get("name_by_user") or d.get("name") or "Zigbee2MQTT"}
+            ident = next(i for dom, i in d["identifiers"] if dom == "mqtt" and i.startswith("zigbee2mqtt_bridge_"))
+            bridges[d["id"]] = {"id": d["id"], "source": "z2m", "name": d.get("name_by_user") or d.get("name") or "Zigbee2MQTT",
+                                "ieee": ident.removeprefix("zigbee2mqtt_bridge_")}
             continue
         found = zigbee_source(d)
         if not found:
@@ -170,6 +172,49 @@ async def progress(request):
     return web.json_response(PROGRESS.get(request.query.get("id", ""), {"done": 0, "total": 1, "label": "…"}))
 
 
+async def mqtt_collect(filters, seconds=2.5):
+    """Abonniert MQTT-Topics über Home Assistant und sammelt die (auch zurückgehaltenen) Nachrichten."""
+    if not TOKEN:
+        raise web.HTTPServiceUnavailable(text="Kein SUPERVISOR_TOKEN – läuft nicht als Add-on")
+    out = []
+    try:
+        async with ClientSession() as session, session.ws_connect(WS_URL, max_msg_size=0) as ws:
+            await ws.receive_json()
+            await ws.send_json({"type": "auth", "access_token": TOKEN})
+            if (await ws.receive_json())["type"] != "auth_ok":
+                raise web.HTTPBadGateway(text="Authentifizierung bei Home Assistant fehlgeschlagen")
+            for i, topic in enumerate(filters, 1):
+                await ws.send_json({"id": i, "type": "mqtt/subscribe", "topic": topic})
+            end = time.monotonic() + seconds
+            while (left := end - time.monotonic()) > 0:
+                try:
+                    msg = await asyncio.wait_for(ws.receive_json(), left)
+                except asyncio.TimeoutError:
+                    break
+                if msg.get("type") == "event":
+                    out.append((msg["event"].get("topic", ""), msg["event"].get("payload", "")))
+    except (ClientError, asyncio.TimeoutError, ValueError) as err:
+        raise web.HTTPBadGateway(text=f"Keine Verbindung zu Home Assistant ({WS_URL}): {err!r}")
+    return out
+
+
+async def z2m_bases(request):
+    """Findet die Zigbee2MQTT-Instanzen über ihre zurückgehaltene Nachricht <base>/bridge/info."""
+    found, seen = [], set()
+    for topic, payload in await mqtt_collect(["+/bridge/info", "+/+/bridge/info"]):
+        base = topic.removesuffix("/bridge/info")
+        try:
+            info = json.loads(payload)
+        except ValueError:
+            continue
+        if base in seen or not isinstance(info, dict):
+            continue
+        seen.add(base)
+        found.append({"base_topic": base, "ieee": (info.get("coordinator") or {}).get("ieee_address", ""),
+                      "version": info.get("version", "")})
+    return web.json_response(found)
+
+
 async def z2m_request(base, action, payload, timeout=12):
     """Sendet eine Anfrage an Zigbee2MQTT und wartet auf dessen Antwort unter <base>/bridge/response/<action>.
     Liefert Z2Ms Antwort ({"status": "ok"|"error", ...}) oder {"status": "timeout"}."""
@@ -216,13 +261,21 @@ async def z2m_request(base, action, payload, timeout=12):
         raise web.HTTPBadGateway(text=f"Keine Verbindung zu Home Assistant ({WS_URL}): {err!r}")
 
 
-def z2m_failure(base, result):
+async def known_bases_hint():
+    try:
+        bases = [b for t, _ in await mqtt_collect(["+/bridge/info", "+/+/bridge/info"], 2.0) if (b := t.removesuffix("/bridge/info"))]
+    except web.HTTPException:
+        return ""
+    return f" Gefundene Zigbee2MQTT-Basis-Topics: {', '.join(sorted(set(bases)))}." if bases else " Es wurde kein Zigbee2MQTT über MQTT gefunden."
+
+
+async def z2m_failure(base, result):
     """Menschenlesbare Fehlermeldung, wenn Zigbee2MQTT die Anfrage nicht ausgeführt hat (sonst None)."""
     status = result.get("status")
     if status == "ok" or status == "unknown":
         return None
     if status == "timeout":
-        return f"Keine Antwort von Zigbee2MQTT – stimmt der Basis-Topic „{base}“? Läuft Z2M?"
+        return f"Keine Antwort von Zigbee2MQTT auf „{base}“ – stimmt der Basis-Topic? Läuft Z2M?" + await known_bases_hint()
     return f"Zigbee2MQTT: {result.get('error') or result}"
 
 
@@ -234,7 +287,7 @@ async def permit_join(request):
         cmd = {"type": "call_service", "domain": "zha", "service": "permit", "service_data": {"duration": seconds}}
     else:
         base = safe_topic(body.get("base_topic"))
-        failure = z2m_failure(base, await z2m_request(base, "permit_join", {"time": seconds}, timeout=8))
+        failure = await z2m_failure(base, await z2m_request(base, "permit_join", {"time": seconds}, timeout=8))
         if failure:
             raise web.HTTPBadGateway(text=failure)
         return web.json_response({"ok": True, "time": seconds})
@@ -580,7 +633,7 @@ async def apply(request):
         if z2m_mode and it.get("source") == "z2m" and it.get("ieee"):
             # In Zigbee2MQTT umbenennen und Z2Ms Antwort abwarten; die HA-Entity-IDs ändern wir selbst, damit wir sie kennen
             base = safe_topic(it.get("base_topic"))
-            failure = z2m_failure(base, await z2m_request(
+            failure = await z2m_failure(base, await z2m_request(
                 base, "device/rename", {"from": it["ieee"], "to": it["name"], "homeassistant_rename": True}))
             ok, res = (failure is None), failure
             cmd = {}
@@ -737,6 +790,7 @@ def make_app():
         web.post("/api/apply", apply),
         web.post("/api/verify", verify),
         web.get("/api/progress", progress),
+        web.get("/api/z2m_bases", z2m_bases),
         web.post("/api/assign_area", assign_area),
     ])
     return app
