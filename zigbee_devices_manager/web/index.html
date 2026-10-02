@@ -362,6 +362,7 @@ function renderDevices() {
       <div class="chips">${[["all", "Alle"], ["new", "Neu (" + counts.new + ")"], ["named", "Benannt"], ["planned", "Geplant"]].map(([k, l]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}">${l}</button>`).join("")}</div>
       ${multiGw ? `<select id="gwf"><option value="">Alle Gateways</option>${S.bridges.map(b => `<option value="${esc(b.id)}"${S.gwFilter === b.id ? " selected" : ""}>${esc(gwLabel(b.id))}</option>`).join("")}</select>` : ""}
       <span style="flex:1"></span>
+      <button class="btn" id="reload" title="Liest alle Geräte neu aus Home Assistant">↻ Neu laden</button>
       <button class="btn" id="addPlanned">＋ Neues Gerät planen</button>
     </div>
     <div class="bar">
@@ -417,6 +418,7 @@ function renderDevices() {
   $("#rYaml", root).onchange = e => S.updateYaml = e.target.checked;
   $("#rNode", root).onchange = e => S.updateNodered = e.target.checked;
   $("#selAll", root).onchange = e => { rows.forEach(d => e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id)); renderDevices(); };
+  $("#reload", root).onclick = async () => { await refreshFromHA(); renderDevices(); };
   $("#addPlanned", root).onclick = () => {
     const name = prompt("Name des geplanten Geräts (wird reserviert, damit die Nummer nicht doppelt vergeben wird):");
     if (name?.trim()) { S.planned.push({id: uid("p_"), name: name.trim()}); persist(); renderDevices(); }
@@ -507,6 +509,17 @@ async function runWithProgress(title, fn) {
   finally { clearInterval(timer); set(1, 1, "Fertig"); dlg.close(); dlg.remove(); }
 }
 
+/** Liest Geräte, Bereiche und Etagen frisch aus Home Assistant, damit die Liste den echten Stand zeigt. */
+async function refreshFromHA(quiet = false) {
+  if (api.demo) return;
+  try {
+    const data = await api.load();
+    if (api.error) { api.error = null; return; }
+    S.devices = data.devices; S.bridges = data.bridges || S.bridges; S.areas = data.areas || S.areas; S.haFloors = data.floors || S.haFloors;
+    if (!quiet) toast("Liste neu aus Home Assistant geladen");
+  } catch (e) { if (!quiet) toast("Neu laden fehlgeschlagen: " + e.message); }
+}
+
 /** Bereich lokal nachziehen; neu angelegte Bereiche mit dem Raum verknüpfen. */
 function adoptAreas(items) {
   for (const it of items || []) {
@@ -527,6 +540,7 @@ async function assignAreas(devs) {
     if (!await confirmPlan(plan, plan.areas.length, true)) return;
     const res = await api.assignAreas(list);
     adoptAreas(res.items);
+    await refreshFromHA(true);
     await showChecks(res.checks || [], {items: res.items, renamed: [], opts: {set_area: true, skip_names: true}}, res.errors || []);
   } catch (e) { toast("Fehler: " + e.message); }
   renderDevices();
@@ -568,6 +582,7 @@ async function applyBatch(items) {
       adoptAreas(res.items);
       const failed = new Set((res.errors || []).map(e => e.device_id).filter(Boolean));
       for (const [d, name] of real) { if (failed.has(d.id)) continue; const dev = S.devices.find(x => x.id === d.id); dev.name = name; dev.is_new = false; }
+      await refreshFromHA(true); // maßgeblich ist, was Home Assistant wirklich hat
       if (res.errors?.length) toast("Fehler: " + res.errors.map(e => e.device + ": " + e.error).join("; "));
       await showChecks(res.checks || [], {items: res.items || api.payload(real), renamed: res.renamed_entities || [], opts: api.opts()}, res.errors || []);
     } catch (e) { toast("Fehler: " + e.message); return 0; }
