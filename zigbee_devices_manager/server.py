@@ -12,7 +12,21 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 DATA = Path(os.environ.get("DATA_DIR", "/data"))
 WEB = Path(__file__).parent / "web"
-TOKEN = os.environ.get("SUPERVISOR_TOKEN")
+S6_ENV_DIR = Path(os.environ.get("S6_ENV_DIR", "/run/s6/container_environment"))
+
+
+def read_token():
+    """SUPERVISOR_TOKEN aus der Umgebung, sonst aus dem s6-Container-Environment (HA-Add-on-Standard)."""
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        try:
+            token = (S6_ENV_DIR / "SUPERVISOR_TOKEN").read_text().strip()
+        except OSError:
+            token = None
+    return token or None
+
+
+TOKEN = read_token()
 WS_URL = os.environ.get("HA_WS_URL", "ws://supervisor/core/websocket")
 STORE_FILE = DATA / "store.json"
 log = logging.getLogger("zdm")
