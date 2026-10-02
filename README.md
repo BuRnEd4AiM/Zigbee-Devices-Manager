@@ -1,5 +1,7 @@
 # Zigbee Devices Manager
 
+[![Demo herunterladen](https://img.shields.io/badge/%E2%AC%87%EF%B8%8F-Demo%20herunterladen-0b7bd6?style=for-the-badge)](https://raw.githubusercontent.com/BuRnEd4AiM/Zigbee-Devices-Manager/main/demo/zigbee-devices-manager-demo.html)
+
 English version: [README.en.md](README.en.md)
 
 Home-Assistant-Add-on mit eigener Seitenleisten-Spalte („Zigbee Namen“), in der du die Namen
