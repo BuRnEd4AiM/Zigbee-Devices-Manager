@@ -91,6 +91,7 @@ const DEFAULT_SCHEME = {
   counter: {style: "arabic", pad: 2, start: 1},
   houses: [{id: "h1", name: "Haus 1", abbr: "H1"}, {id: "h2", name: "Haus 2", abbr: "H2"}],
   defaultHouse: "h1",
+  floors: [{id: "f0", name: "Erdgeschoss", abbr: "H0"}, {id: "f1", name: "1. Etage", abbr: "H1"}, {id: "f2", name: "2. Etage", abbr: "H2"}, {id: "f3", name: "3. Etage", abbr: "H3"}],
   rooms: [
     {id: "r1", name: "Wohnzimmer", abbr: "WZ"}, {id: "r2", name: "Küche", abbr: "KU"},
     {id: "r3", name: "Schlafzimmer", abbr: "SZ"}, {id: "r4", name: "Bad", abbr: "BD"},
@@ -105,7 +106,8 @@ const DEFAULT_SCHEME = {
   ]
 };
 
-const DEMO_AREAS = ["Wohnzimmer", "Küche", "Schlafzimmer", "Bad", "Flur", "Büro", "Terrasse", "Keller"].map(n => ({id: "area_" + n.toLowerCase().replace("ü", "ue"), name: n}));
+const DEMO_FLOORS = [{id: "fl_eg", name: "Erdgeschoss", level: 0}, {id: "fl_og", name: "Obergeschoss", level: 1}, {id: "fl_ug", name: "Untergeschoss", level: -1}];
+const DEMO_AREAS = [["Wohnzimmer", "fl_eg"], ["Küche", "fl_eg"], ["Flur", "fl_eg"], ["Schlafzimmer", "fl_og"], ["Bad", "fl_og"], ["Büro", "fl_og"], ["Terrasse", "fl_eg"], ["Keller", "fl_ug"]].map(([n, f]) => ({id: "area_" + n.toLowerCase().replace("ü", "ue"), name: n, floor_id: f}));
 const DEMO_BRIDGES = [{id: "b1", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 1)"}, {id: "b2", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 2)"}];
 const DEMO_DEVICES = [
   ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0001", "Wohnzimmer", "Wohnzimmer Stehlampe"],
@@ -153,16 +155,16 @@ function fmtNr(n, c) {
   return String(n).padStart(c.pad, "0");
 }
 function applyCase(s, mode) { return mode === "upper" ? s.toUpperCase() : mode === "lower" ? s.toLowerCase() : s; }
-function buildName(scheme, room, type, n, house) {
+function buildName(scheme, room, type, n, house, floor) {
   const s = scheme.pattern
-    .replaceAll("{house}", house?.abbr ?? "").replaceAll("{room}", room?.abbr ?? "").replaceAll("{type}", type?.abbr ?? "")
+    .replaceAll("{house}", house?.abbr ?? "").replaceAll("{floor}", floor?.abbr ?? "").replaceAll("{room}", room?.abbr ?? "").replaceAll("{type}", type?.abbr ?? "")
     .replaceAll("{nr}", fmtNr(n, scheme.counter));
   return applyCase(s, scheme.case);
 }
 /** Nächste freie Nummer für Haus+Raum+Typ, berücksichtigt bereits belegte Namen. */
-function nextName(scheme, room, type, used, house) {
+function nextName(scheme, room, type, used, house, floor) {
   for (let n = scheme.counter.start; n < 10000; n++) {
-    const name = buildName(scheme, room, type, n, house);
+    const name = buildName(scheme, room, type, n, house, floor);
     if (!used.has(name.toLowerCase())) return name;
   }
 }
@@ -185,7 +187,7 @@ const api = {
     try { store = JSON.parse(localStorage.getItem("zdm-demo-store") || "{}"); } catch (e) {}
     let devices = clone(DEMO_DEVICES);
     try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); devices.forEach(d => { if (n[d.id]) { d.name = n[d.id]; d.is_new = false; } }); } catch (e) {}
-    return {devices, store, bridges: DEMO_BRIDGES, areas: DEMO_AREAS};
+    return {devices, store, bridges: DEMO_BRIDGES, areas: DEMO_AREAS, floors: DEMO_FLOORS};
   },
   async saveStore(store) {
     if (this.demo) { try { localStorage.setItem("zdm-demo-store", JSON.stringify(store)); } catch (e) {} return; }
@@ -244,7 +246,7 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameEntities: false, updateRefs: true, updateYaml: false, updateNodered: false};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameEntities: false, updateRefs: true, updateYaml: false, updateNodered: false};
 
 function persist() {
   clearTimeout(persist.t);
@@ -260,6 +262,22 @@ function makeAbbr(name, rooms) {
   for (let n = 2; n <= letters.length; n++) { const a = letters.slice(0, n).toUpperCase(); if (!taken.has(a.toLowerCase())) return a; }
   let i = 2; while (taken.has((letters.slice(0, 2) + i).toLowerCase())) i++;
   return letters.slice(0, 2).toUpperCase() + i;
+}
+/** Übernimmt Etagen aus Home Assistant (Kürzel: H<Ebene>, negative Ebenen U<n>). Verknüpft gleichnamige vorhandene Etagen. */
+function syncFloors() {
+  const sc = S.scheme; sc.ignoredFloors = sc.ignoredFloors || []; let changed = false;
+  for (const f of S.haFloors) {
+    if (sc.floors.some(x => x.floor_id === f.id) || sc.ignoredFloors.includes(f.id)) continue;
+    const same = sc.floors.find(x => !x.floor_id && x.name.toLowerCase() === f.name.toLowerCase());
+    if (same) { same.floor_id = f.id; changed = true; continue; }
+    const lvl = Number.isInteger(f.level) ? f.level : null;
+    let abbr = lvl === null ? makeAbbr(f.name, sc.floors) : lvl >= 0 ? "H" + lvl : "U" + -lvl;
+    const byAbbr = sc.floors.find(x => !x.floor_id && x.abbr.toLowerCase() === abbr.toLowerCase()); // z. B. Ebene 1 ↔ vorhandenes H1
+    if (byAbbr) { byAbbr.floor_id = f.id; changed = true; continue; }
+    while (sc.floors.some(x => x.abbr.toLowerCase() === abbr.toLowerCase())) abbr += "x";
+    sc.floors.push({id: uid("f"), name: f.name, abbr, floor_id: f.id}); changed = true;
+  }
+  if (changed) persist();
 }
 /** Übernimmt Bereiche aus Home Assistant als Räume (verknüpft vorhandene gleichnamige, legt fehlende an). Gibt die Zahl neuer Räume zurück. */
 function syncAreas() {
@@ -277,16 +295,24 @@ const typeOf = d => S.scheme.types.find(t => t.id === S.meta[d.id]?.type);
 const gwOf = d => S.gateways[d.bridge] || {};
 const houseOf = d => S.scheme.houses.find(h => h.id === (S.meta[d.id]?.house || gwOf(d).house || S.scheme.defaultHouse));
 const useHouse = () => S.scheme.pattern.includes("{house}");
+const useFloor = () => S.scheme.pattern.includes("{floor}");
+/** Etage: Auswahl am Gerät, sonst die Etage des Raums (HA-Bereich → HA-Etage), sonst Standard. */
+const floorOf = d => {
+  const sc = S.scheme, picked = sc.floors.find(f => f.id === S.meta[d.id]?.floor);
+  if (picked) return picked;
+  const room = roomOf(d), area = S.areas.find(a => a.id === (room?.area_id || d.area_id));
+  return sc.floors.find(f => area?.floor_id && f.floor_id === area.floor_id) || sc.floors.find(f => f.id === sc.defaultFloor);
+};
 
 /** Berechnet Namensvorschläge für alle Zeilen mit Raum+Typ, die noch nicht dem Schema entsprechen. */
 function suggestions() {
   const rows = allRows(), out = new Map();
-  const pending = rows.filter(d => typeOf(d) && (!S.scheme.pattern.includes("{room}") || roomOf(d)) && (!useHouse() || houseOf(d)));
+  const pending = rows.filter(d => typeOf(d) && (!S.scheme.pattern.includes("{room}") || roomOf(d)) && (!useHouse() || houseOf(d)) && (!useFloor() || floorOf(d)));
   const pendIds = new Set(pending.map(d => d.id));
   const used = new Set(rows.filter(d => !pendIds.has(d.id)).map(d => d.name.toLowerCase()));
   for (const d of pending) {
     const room = roomOf(d), type = typeOf(d);
-    const name = nextName(S.scheme, room, type, used, houseOf(d));
+    const name = nextName(S.scheme, room, type, used, houseOf(d), floorOf(d));
     used.add(name.toLowerCase());
     out.set(d.id, name);
   }
@@ -305,6 +331,7 @@ function renderDevices() {
   });
   const roomOpts = sel => `<option value="">–</option>` + S.scheme.rooms.map(r => `<option value="${r.id}"${r.id === sel ? " selected" : ""}>${esc(r.abbr)} · ${esc(r.name)}</option>`).join("");
   const houseOpts = sel => `<option value="">–</option>` + S.scheme.houses.map(h => `<option value="${h.id}"${h.id === sel ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("");
+  const floorOpts = sel => `<option value="">–</option>` + S.scheme.floors.map(f => `<option value="${f.id}"${f.id === sel ? " selected" : ""}>${esc(f.abbr)} · ${esc(f.name)}</option>`).join("");
   const typeOpts = sel => `<option value="">–</option>` + S.scheme.types.map(t => `<option value="${t.id}"${t.id === sel ? " selected" : ""}>${esc(t.abbr)} · ${esc(t.name)}</option>`).join("");
   const counts = {all: allRows().length, new: allRows().filter(d => d.is_new).length};
   const applicable = rows.filter(d => sug.has(d.id) && sug.get(d.id) !== d.name && (!S.sel.size || S.sel.has(d.id)));
@@ -320,7 +347,8 @@ function renderDevices() {
     </div>
     <div class="bar">
       <span class="sub">${S.sel.size} ausgewählt</span>
-      <select id="bHouse" title="Haus">${houseOpts("")}</select>${useHouse() ? "" : `<button class="btn" id="houseOn" title="Im Namensschema steht {house} noch nicht. Klick fügt es vorne an das Muster an.">Haus im Muster aktivieren</button>`}
+      <select id="bHouse" title="Haus">${houseOpts("")}</select>
+      <select id="bFloor" title="Etage">${floorOpts("")}</select>${useFloor() ? "" : `<button class="btn" id="floorOn" title="Im Namensschema steht {floor} noch nicht. Klick fügt es vorne an das Muster an.">Etage im Muster aktivieren</button>`}${useHouse() ? "" : `<button class="btn" id="houseOn" title="Im Namensschema steht {house} noch nicht. Klick fügt es vorne an das Muster an.">Haus im Muster aktivieren</button>`}
       <select id="bRoom">${roomOpts("")}</select>
       <select id="bType">${typeOpts("")}</select>
       <button class="btn" id="bAssign" ${S.sel.size ? "" : "disabled"}>Zuweisen</button>
@@ -333,7 +361,7 @@ function renderDevices() {
     </div>
     <div class="card"><table>
       <thead><tr><th><input type="checkbox" id="selAll" ${rows.length && rows.every(d => S.sel.has(d.id)) ? "checked" : ""}></th>
-        <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Gateway</th>" : ""}<th>Haus</th><th>Raum</th><th>Typ</th><th class="hide-s hide-l">Gerät</th><th class="hide-s hide-m">IEEE</th><th>Status</th><th></th></tr></thead>
+        <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Gateway</th>" : ""}<th>Haus</th><th>Etage</th><th>Raum</th><th>Typ</th><th class="hide-s hide-l">Gerät</th><th class="hide-s hide-m">IEEE</th><th>Status</th><th></th></tr></thead>
       <tbody>${rows.map(d => {
         const s = sug.get(d.id), r = roomOf(d), t = typeOf(d);
         const nameCell = S.editing === d.id
@@ -345,6 +373,7 @@ function renderDevices() {
           <td>${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}</td>
           ${multiGw ? `<td class="sub">${esc(d.planned ? "" : gwLabel(d.bridge))}</td>` : ""}
           <td><select class="house">${houseOpts(houseOf(d)?.id)}</select></td>
+          <td><select class="floor">${floorOpts(floorOf(d)?.id)}</select></td>
           <td><select class="room">${roomOpts(r?.id)}</select></td>
           <td><select class="type">${typeOpts(t?.id)}</select></td>
           <td class="hide-s hide-l">${esc(d.manufacturer)}<div class="sub">${esc(d.model || d.orig_name)}</div></td>
@@ -352,13 +381,14 @@ function renderDevices() {
           <td><span class="badge ${d.planned ? "plan" : d.is_new ? "new" : "ok"}">${d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}</span></td>
           <td>${s && s !== d.name ? `<button class="btn apply">Übernehmen</button>` : ""}${d.planned ? `<button class="x delP" title="Entfernen">✕</button>` : ""}</td>
         </tr>`;
-      }).join("") || `<tr><td colspan="11" class="empty">Keine Geräte gefunden.</td></tr>`}</tbody>
+      }).join("") || `<tr><td colspan="12" class="empty">Keine Geräte gefunden.</td></tr>`}</tbody>
     </table></div>`;
 
   const root = $("#tab-devices");
   $("#q", root).oninput = e => { S.q = e.target.value; const p = e.target.selectionStart; renderDevices(); const i = $("#q"); i.focus(); i.setSelectionRange(p, p); };
   root.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { S.filter = b.dataset.f; renderDevices(); });
   $("#gwf", root) && ($("#gwf", root).onchange = e => { S.gwFilter = e.target.value; renderDevices(); });
+  $("#floorOn", root) && ($("#floorOn", root).onclick = () => { S.scheme.pattern = "{floor}-" + S.scheme.pattern; S.scheme.case = "keep"; persist(); toast("Muster: " + S.scheme.pattern); renderDevices(); });
   $("#houseOn", root) && ($("#houseOn", root).onclick = () => { S.scheme.pattern = "{house}-" + S.scheme.pattern; S.scheme.case = "keep"; persist(); toast("Muster: " + S.scheme.pattern); renderDevices(); });
   $("#rEnt", root).onchange = e => { S.renameEntities = e.target.checked; renderDevices(); };
   $("#rRef", root).onchange = e => S.updateRefs = e.target.checked;
@@ -370,8 +400,8 @@ function renderDevices() {
     if (name?.trim()) { S.planned.push({id: uid("p_"), name: name.trim()}); persist(); renderDevices(); }
   };
   $("#bAssign", root).onclick = () => {
-    const room = $("#bRoom", root).value, type = $("#bType", root).value, house = $("#bHouse", root)?.value;
-    S.sel.forEach(id => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type}), ...(house && {house})}; });
+    const room = $("#bRoom", root).value, type = $("#bType", root).value, house = $("#bHouse", root)?.value, floor = $("#bFloor", root)?.value;
+    S.sel.forEach(id => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type}), ...(house && {house}), ...(floor && {floor})}; });
     persist(); renderDevices();
   };
   $("#applyAll", root).onclick = async () => {
@@ -382,6 +412,7 @@ function renderDevices() {
     const d = rows.find(x => x.id === tr.dataset.id);
     $(".sel", tr).onchange = e => { e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id); renderDevices(); };
     $(".house", tr) && ($(".house", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], house: e.target.value}; persist(); renderDevices(); });
+    $(".floor", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], floor: e.target.value}; persist(); renderDevices(); };
     $(".room", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], room: e.target.value}; persist(); renderDevices(); };
     $(".type", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], type: e.target.value}; persist(); renderDevices(); };
     $(".apply", tr) && ($(".apply", tr).onclick = async () => { if (await applyBatch([[d, sug.get(d.id)]])) toast("Name übernommen"); renderDevices(); });
@@ -512,20 +543,23 @@ setInterval(tickPermit, 1000); setInterval(pollPermit, 6000);
 
 // ---------- Schema-Tab ----------
 function renderScheme() {
-  const sc = S.scheme, c = sc.counter, r0 = sc.rooms[0], t0 = sc.types[0], r1 = sc.rooms[1] || r0, h0 = sc.houses[0], h1 = sc.houses[1] || h0;
+  const sc = S.scheme, c = sc.counter, r0 = sc.rooms[0], t0 = sc.types[0], r1 = sc.rooms[1] || r0, h0 = sc.houses[0], h1 = sc.houses[1] || h0, e0 = sc.floors[0], e1 = sc.floors[1] || e0;
   const used = new Set(), ex = [];
-  for (const [h, r, t] of [[h0, r0, t0], [h0, r0, t0], [h0, r0, t0], [h0, r1, t0], [h1, r0, t0], [h0, r0, sc.types[1] || t0]]) { const n = nextName(sc, r, t, used, h); used.add(n.toLowerCase()); ex.push(n); }
+  for (const [h, e, r, t] of [[h0, e0, r0, t0], [h0, e0, r0, t0], [h0, e0, r0, t0], [h0, e0, r1, t0], [h0, e1, r0, t0], [h1, e0, r0, t0], [h0, e0, r0, sc.types[1] || t0]]) { const n = nextName(sc, r, t, used, h, e); used.add(n.toLowerCase()); ex.push(n); }
   const list = (kind, items) => items.map(i => `<div class="row" data-id="${i.id}">
       <input data-k="name" value="${esc(i.name)}" placeholder="Name"><input class="abbr" data-k="abbr" value="${esc(i.abbr)}" placeholder="Kürzel" maxlength="8">${i.area_id ? `<span class="badge" title="Mit Home-Assistant-Bereich verknüpft">HA</span>` : ""}
       <button class="x" data-del="${kind}" title="Entfernen">✕</button></div>`).join("");
   $("#tab-scheme").innerHTML = `<div class="grid">
     <div class="panel"><h2>Muster</h2>
       <div class="row"><label>Muster</label><input id="pat" value="${esc(sc.pattern)}" style="flex:1"></div>
-      <div class="row"><label></label>${["{house}", "{room}", "{type}", "{nr}"].map(t => `<button class="tok" data-tok="${t}">${t}</button>`).join("")}<span class="sub">Trenner (_ - . Leerzeichen) frei wählbar</span></div>
+      <div class="row"><label></label>${["{house}", "{floor}", "{room}", "{type}", "{nr}"].map(t => `<button class="tok" data-tok="${t}">${t}</button>`).join("")}<span class="sub">Trenner (_ - . Leerzeichen) frei wählbar</span></div>
       <div class="row"><label>Beispiele</label><select id="ex"><option value="">Muster wählen…</option>
         <option value="{room}_{type}_{nr}">{room}_{type}_{nr}  → wz_lp_01</option>
-        <option value="{house}-{room}-{type}{nr}">{house}-{room}-{type}{nr}  → H1-wzfl-lband01</option>
+        <option value="{floor}-{room}-{type}{nr}">{floor}-{room}-{type}{nr}  → H1-wzfl-lband01 (H1 = Etage)</option>
+        <option value="{house}-{room}-{type}{nr}">{house}-{room}-{type}{nr}  → H1-wzfl-lband01 (H1 = Haus)</option>
+        <option value="{house}-{floor}-{room}-{type}{nr}">{house}-{floor}-{room}-{type}{nr}  → A-H1-wzfl-lband01</option>
         <option value="{house}_{room}_{type}_{nr}">{house}_{room}_{type}_{nr}  → H1_wz_lp_01</option></select></div>
+      <div class="row"><label>Standard-Etage</label><select id="df"><option value="">–</option>${sc.floors.map(f => `<option value="${f.id}"${f.id === sc.defaultFloor ? " selected" : ""}>${esc(f.abbr)} · ${esc(f.name)}</option>`).join("")}</select><span class="sub">wenn Raum/Bereich keine Etage hat</span></div>
       <div class="row"><label>Standard-Haus</label><select id="dh">${sc.houses.map(h => `<option value="${h.id}"${h.id === sc.defaultHouse ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("")}</select><span class="sub">für Geräte ohne eigene Haus-Auswahl</span></div>
       <div class="row"><label>Schreibweise</label><select id="case"><option value="upper">GROSS</option><option value="lower">klein</option><option value="keep">wie eingegeben</option></select></div>
       <div class="row"><label>Zähler</label><select id="cst"><option value="arabic">1, 2, 3</option><option value="roman">I, II, III</option><option value="alpha">A, B, C</option></select>
@@ -535,6 +569,7 @@ function renderScheme() {
       <p class="sub">Der Zähler zählt je Raum+Typ automatisch hoch und überspringt bereits vergebene Namen.</p>
     </div>
     <div class="panel list"><h2>Häuser / Präfix</h2>${list("houses", sc.houses)}<button class="btn" data-add="houses">＋ Haus</button></div>
+    <div class="panel list"><h2>Etagen</h2><p class="sub">z. B. H0 = Erdgeschoss, H1 = 1. Etage, S2 = …; frei wählbar. Etagen aus Home Assistant werden übernommen und per Raum/Bereich automatisch zugeordnet.</p>${list("floors", sc.floors)}<button class="btn" data-add="floors">＋ Etage</button></div>
     <div class="panel list"><h2>Räume</h2>${list("rooms", sc.rooms)}<button class="btn" data-add="rooms">＋ Raum</button> <button class="btn" id="syncAreas" title="Bereiche aus Home Assistant als Räume übernehmen">⟳ Bereiche aus HA</button>${S.areas.length ? "" : ` <span class="sub">(keine Bereiche gefunden)</span>`}</div>
     <div class="panel list"><h2>Gerätetypen</h2>${list("types", sc.types)}<button class="btn" data-add="types">＋ Typ</button></div>
   </div>`;
@@ -543,9 +578,10 @@ function renderScheme() {
   const upd = () => { persist(); renderScheme(); };
   $("#pat", root).onchange = e => { sc.pattern = e.target.value; upd(); };
   root.querySelectorAll("[data-tok]").forEach(b => b.onclick = () => { sc.pattern += b.dataset.tok; upd(); });
-  $("#ex", root).onchange = e => { if (e.target.value) { sc.pattern = e.target.value; if (e.target.value.includes("{house}")) sc.case = "keep"; upd(); } };
+  $("#ex", root).onchange = e => { if (e.target.value) { sc.pattern = e.target.value; if (/\{(house|floor)\}/.test(e.target.value)) sc.case = "keep"; upd(); } };
+  $("#df", root).onchange = e => { sc.defaultFloor = e.target.value; upd(); };
   $("#dh", root).onchange = e => { sc.defaultHouse = e.target.value; upd(); };
-  $("#syncAreas", root).onclick = () => { sc.ignoredAreas = []; const n = syncAreas(); toast(n ? n + " Räume aus Home Assistant übernommen" : "Alle Bereiche sind schon vorhanden"); renderScheme(); };
+  $("#syncAreas", root).onclick = () => { sc.ignoredAreas = []; sc.ignoredFloors = []; syncFloors(); const n = syncAreas(); toast(n ? n + " Räume aus Home Assistant übernommen" : "Alle Bereiche sind schon vorhanden"); renderScheme(); };
   $("#case", root).onchange = e => { sc.case = e.target.value; upd(); };
   $("#cst", root).onchange = e => { c.style = e.target.value; upd(); };
   $("#cpad", root).onchange = e => { c.pad = Math.max(1, +e.target.value || 1); upd(); };
@@ -555,6 +591,7 @@ function renderScheme() {
     row.querySelectorAll("input").forEach(inp => inp.onchange = () => { item[inp.dataset.k] = inp.value.trim(); upd(); });
     row.querySelector("[data-del]").onclick = () => {
       if (item.area_id) sc.ignoredAreas = [...(sc.ignoredAreas || []), item.area_id]; // nicht automatisch neu anlegen
+      if (item.floor_id) sc.ignoredFloors = [...(sc.ignoredFloors || []), item.floor_id];
       sc[kind] = sc[kind].filter(i => i !== item); upd();
     };
   });
@@ -570,7 +607,7 @@ function renderExport() {
       <button class="btn" id="sExp">Schema exportieren</button> <button class="btn" id="sImp">Schema importieren…</button>
       <input type="file" id="sFile" accept="application/json" hidden></div>
   </div>`;
-  const rows = () => allRows().map(d => ({name: d.name, ieee: d.ieee, hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area, haus: houseOf(d)?.name || "", raum: roomOf(d)?.name || "", typ: typeOf(d)?.name || "", status: d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}));
+  const rows = () => allRows().map(d => ({name: d.name, ieee: d.ieee, hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area, haus: houseOf(d)?.name || "", etage: floorOf(d)?.name || "", raum: roomOf(d)?.name || "", typ: typeOf(d)?.name || "", status: d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}));
   $("#csv").onclick = () => {
     const r = rows(), h = Object.keys(r[0] || {name: ""});
     download("zigbee-geraete.csv", [h, ...r.map(o => h.map(k => o[k]))].map(l => l.map(v => `"${String(v).replaceAll('"', '""')}"`).join(";")).join("\n"), "text/csv");
@@ -582,7 +619,7 @@ function renderExport() {
     try {
       const s = JSON.parse(await e.target.files[0].text());
       if (!s.pattern || !Array.isArray(s.rooms) || !Array.isArray(s.types) || !s.counter) throw new Error("Ungültiges Schema");
-      S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, ...s}; persist(); toast("Schema importiert");
+      S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, floors: clone(DEFAULT_SCHEME.floors), ...s}; persist(); toast("Schema importiert");
     } catch (err) { toast("Import fehlgeschlagen: " + err.message); }
   };
 }
@@ -599,12 +636,13 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   S.devices = data.devices; S.bridges = data.bridges || [];
   const st = data.store || {};
   S.gateways = st.gateways || {};
-  S.areas = data.areas || [];
-  if (st.scheme?.pattern) S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, ...st.scheme};
+  S.areas = data.areas || []; S.haFloors = data.floors || [];
+  if (st.scheme?.pattern) S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, floors: clone(DEFAULT_SCHEME.floors), ...st.scheme};
   S.meta = st.meta || {}; S.planned = st.planned || [];
   if (api.error) $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--new)"><b>Verbindung zu Home Assistant fehlgeschlagen.</b> Das Add-on läuft, kann aber keine Geräte laden – keine Demo-Daten.<br><code>${esc(api.error)}</code><br><button class="btn" style="margin-top:8px" onclick="location.reload()">Erneut versuchen</button> <a href="api/diag" target="_blank">Diagnose öffnen</a> <span class="sub">(Details auch im Add-on-Log)</span></div>`;
   else if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee-Geräte geladen und umbenannt.</div>`;
-  syncAreas();
+  S.scheme.floors = S.scheme.floors || clone(DEFAULT_SCHEME.floors); S.scheme.defaultFloor = S.scheme.defaultFloor || "";
+  syncFloors(); syncAreas();
   renderDevices();
 })();
 </script>

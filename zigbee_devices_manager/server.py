@@ -108,6 +108,9 @@ async def get_state(request):
         {"type": "config/area_registry/list"},
     ])
     area_names = {a["area_id"]: a["name"] for a in areas}
+    ok, floors = await ha_try({"type": "config/floor_registry/list"})  # ältere HA-Versionen kennen keine Etagen
+    if not ok:
+        floors = []
     out, bridges = [], {}
     for d in devices:
         if any(dom == "mqtt" and ident.startswith("zigbee2mqtt_bridge_") for dom, ident in d.get("identifiers", [])):
@@ -135,7 +138,8 @@ async def get_state(request):
         })
     used = {d["bridge"] for d in out}
     return web.json_response({"devices": out, "store": load_store(),
-                              "areas": [{"id": a["area_id"], "name": a["name"]} for a in areas],
+                              "areas": [{"id": a["area_id"], "name": a["name"], "floor_id": a.get("floor_id") or ""} for a in areas],
+                              "floors": [{"id": f["floor_id"], "name": f["name"], "level": f.get("level")} for f in floors],
                               "bridges": [b for b in bridges.values() if b["id"] in used or b["source"] == "z2m"]})
 
 
