@@ -590,10 +590,15 @@ function confirmPlan(plan, count, areaOnly = false) {
       ${(plan.areas || []).length ? `<p class="sub">Bereich in Home Assistant (${plan.areas.length}):</p>
       <div class="preview" style="max-height:140px;overflow:auto">${plan.areas.map(a => `${esc(a.device)}: ${esc(a.from || "–")} → <b>${esc(a.to)}</b>${a.create ? ` <span class="sub">(wird neu angelegt)</span>` : ""}`).join("<br>")}</div>` : ""}
       ${!areaOnly && S.renameEntities ? `<p class="sub" style="margin-top:12px">Entity-IDs, die sich ändern (${plan.entities.length}):</p>
-      <div class="preview" style="max-height:160px;overflow:auto">${plan.entities.map(e => `${esc(e.old)} → <b>${esc(e.new)}</b>`).join("<br>") || "keine"}</div>` : ""}
+      <div class="preview" style="max-height:160px;overflow:auto">${plan.entities.map(e => `${esc(e.old)} → <b>${esc(e.new)}</b>`).join("<br>") || (plan.entity_info || []).map(i => {
+        const list = (i.entities || []).map(esc).join(", ") + (i.count > (i.entities || []).length ? " …" : "");
+        return `<b>${esc(i.device)}</b>: ` + (i.reason === "already" ? `die Entity-IDs enthalten den neuen Namen schon – nichts zu ändern<br><span class="sub">${list}</span>`
+          : i.reason === "none" ? "keine Entitäten in Home Assistant gefunden"
+          : i.reason === "nomatch" ? `keine Entity-ID beginnt mit dem alten Namen – deshalb bleibt sie unverändert<br><span class="sub">${list}</span>` : "keine Änderung");
+      }).join("<br>") || "keine"}</div>` : ""}
       ${plan.skipped.length ? `<p class="sub">Übersprungen: ${plan.skipped.map(s => esc(s.old) + " (" + esc(s.reason) + ")").join(", ")}</p>` : ""}
       ${refs ? `<p class="sub" style="margin-top:12px">Verweise, die angepasst werden (${plan.usages.length}):</p>
-      <div class="preview" style="max-height:160px;overflow:auto">${plan.usages.map(u => `${kinds[u.kind] || u.kind}: <b>${esc(u.title)}</b> <span class="sub">(${u.entities.length} Entität${u.entities.length == 1 ? "" : "en"})</span>`).join("<br>") || "keine gefunden"}</div>
+      <div class="preview" style="max-height:160px;overflow:auto">${plan.usages.map(u => `${kinds[u.kind] || u.kind}: <b>${esc(u.title)}</b> <span class="sub">(${u.entities.length} Entität${u.entities.length == 1 ? "" : "en"})</span>`).join("<br>") || (plan.entities.length ? "keine gefunden" : "nichts zu ersetzen, weil sich keine Entity-ID ändert")}</div>
       ${plan.unreadable ? `<p class="sub">${plan.unreadable} Automationen/Szenen sind nicht über die Oberfläche lesbar (YAML) und werden <b>nicht</b> angepasst.</p>` : ""}
       ${(plan.notes || []).map(n => `<p class="sub">⚠ ${esc(n)}</p>`).join("")}
       ${S.updateNodered ? `<p class="sub">Node-RED danach neu starten, sonst überschreibt ein Deploy die Änderung.</p>` : ""}
