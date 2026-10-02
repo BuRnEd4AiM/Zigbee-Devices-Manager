@@ -272,7 +272,27 @@ function persist() {
   persist.t = setTimeout(() => api.saveStore({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways}).catch(e => toast("Speichern fehlgeschlagen: " + e.message)), 300);
 }
 const allRows = () => [...S.devices, ...S.planned.map(p => ({id: p.id, name: p.name, orig_name: "", manufacturer: "", model: "", ieee: "", area: "", is_new: false, planned: true}))];
-const roomOf = d => { const id = S.meta[d.id]?.room; return S.scheme.rooms.find(r => r.id === id) || S.scheme.rooms.find(r => d.area_id && r.area_id === d.area_id) || S.scheme.rooms.find(r => d.area && r.name.toLowerCase() === d.area.toLowerCase()); };
+/** Raum: eigene Auswahl, sonst Raum des HA-Bereichs – aber nur, wenn er zu Haus/Etage des Geräts passt (z. B. kein „Bad (H1)“ für ein S2-Gerät). */
+const roomOf = d => {
+  const rooms = S.scheme.rooms, picked = rooms.find(r => r.id === S.meta[d.id]?.room);
+  if (picked) return picked;
+  const code = devCode(d);
+  const ok = r => !code || !roomCodes(r).length || roomCodes(r).includes(code);
+  return [rooms.find(r => d.area_id && r.area_id === d.area_id), rooms.find(r => d.area && r.name.toLowerCase() === d.area.toLowerCase())].find(r => r && ok(r));
+};
+/** Haus+Etage-Code des Geräts (z. B. „s2“) aus Auswahl oder Namen; null, wenn Haus oder Etage unbekannt. */
+function devCode(d) {
+  if (!useHouse() || !useFloor()) return null;
+  const p = parseNameLoose(d.name) || {}, sc = S.scheme;
+  const house = sc.houses.find(h => h.id === (S.meta[d.id]?.house || p.house)), floor = sc.floors.find(f => f.id === (S.meta[d.id]?.floor || p.floor));
+  return house && floor ? (house.abbr + floor.abbr).toLowerCase() : null;
+}
+/** Haus+Etage-Codes, die im Raum-/Bereichsnamen stehen, z. B. „Gang (H1)“ → ["h1"]. */
+function roomCodes(room) {
+  if (!useHouse() || !useFloor()) return [];
+  const name = room.name.toLowerCase(), sc = S.scheme;
+  return sc.houses.flatMap(h => sc.floors.map(f => (h.abbr + f.abbr).toLowerCase())).filter(c => new RegExp("(^|[^a-z0-9])" + c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "($|[^a-z0-9])").test(name));
+}
 
 /** Kürzel für einen neuen Raum: erste Buchstaben des Namens, eindeutig unter den vorhandenen Räumen. */
 function makeAbbr(name, rooms) {
@@ -348,16 +368,44 @@ function parseName(name) {
   pr.keys.forEach((k, i) => { const v = m[i + 1]; out[k] = k === "nr" ? v : lists[k].find(x => x.abbr.toLowerCase() === v.toLowerCase())?.id; });
   return out;
 }
+/** Erkennt auch Teile eines Namens: führende Bausteine (z. B. „S2“ = Haus+Etage), selbst wenn Raum oder Typ unbekannt sind. */
+function parseNameLoose(name) {
+  const sc = S.scheme, text = (name || "").trim();
+  const esc = t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const alt = items => items.map(i => i.abbr).filter(Boolean).sort((a, b) => b.length - a.length).map(esc).join("|");
+  const nrRe = sc.counter.style === "roman" ? "[IVXLCDM]+" : sc.counter.style === "alpha" ? "[A-Z]+" : "\\d+";
+  const lists = {house: sc.houses, floor: sc.floors, room: sc.rooms, type: sc.types};
+  const parts = sc.pattern.split(/(\{(?:house|floor|room|type|nr)\})/).filter(x => x !== "");
+  const total = parts.filter(x => /^\{/.test(x)).length;
+  for (let k = total; k >= 1; k--) {
+    let src = "", keys = [], end = 0;
+    for (const part of parts) {
+      const m = /^\{(house|floor|room|type|nr)\}$/.exec(part);
+      if (!m) { src += esc(part); continue; }
+      if (keys.length >= k) break;
+      const a = m[1] === "nr" ? nrRe : alt(lists[m[1]] || []);
+      if (!a) { keys = null; break; }
+      keys.push(m[1]); src += "(" + a + ")"; end = src.length;
+    }
+    if (!keys) continue;
+    const mm = new RegExp("^" + src.slice(0, end), "i").exec(text); if (!mm) continue;
+    const out = {};
+    keys.forEach((key, i) => { out[key] = key === "nr" ? mm[i + 1] : lists[key].find(x => x.abbr.toLowerCase() === mm[i + 1].toLowerCase())?.id; });
+    return out;
+  }
+  return null;
+}
 /** Ordnet Haus/Etage/Raum/Typ aus bereits vergebenen Namen zu. overwrite=false: nur Geräte ohne eigene Auswahl. */
 function syncFromNames(overwrite) {
   let matched = 0, unmatched = 0;
   for (const d of S.devices) {
-    const p = parseName(d.name);
-    if (!p) { if (!d.is_new) unmatched++; continue; }
-    if (!overwrite && Object.keys(S.meta[d.id] || {}).length) { matched++; continue; }
+    const full = parseName(d.name), p = full || parseNameLoose(d.name); // Teilerkennung: z. B. nur „S2“ im Namen
+    if (!full && !d.is_new) unmatched++;
+    if (!p) continue;
+    if (!overwrite && Object.keys(S.meta[d.id] || {}).length) { if (full) matched++; continue; }
     const m = {...S.meta[d.id]};
     for (const k of ["house", "floor", "room", "type"]) if (p[k]) m[k] = p[k];
-    S.meta[d.id] = m; matched++;
+    S.meta[d.id] = m; if (full) matched++;
   }
   persist();
   return {matched, unmatched};
