@@ -26,6 +26,8 @@ Einstellungen → Add-ons → Add-on-Store → ⋮ → Repositories →
 
 ## Demo
 
+**[⬇️ Demo herunterladen](https://raw.githubusercontent.com/BuRnEd4AiM/Zigbee-Devices-Manager/main/demo/zigbee-devices-manager-demo.html)** (Rechtsklick → „Link speichern unter…“, dann im Browser öffnen) · [Ansicht auf GitHub](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/blob/main/demo/zigbee-devices-manager-demo.html)
+
 `demo/zigbee-devices-manager-demo.html` ist eine eigenständige Datei (ohne Backend) – einfach
 herunterladen und im Browser öffnen. Neu erzeugen mit `python3 scripts/build_demo.py`
 (auch als GitHub-Action-Artefakt verfügbar).
