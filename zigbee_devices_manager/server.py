@@ -309,6 +309,27 @@ async def collect_usages(body, mapping):
     return find_usages(items, mapping), unreadable, notes
 
 
+async def resolve_areas(body, items):
+    """Ziel-Bereich je Gerät (nur wenn „Raum als Bereich setzen“ aktiv und der Bereich sich ändert)."""
+    out = {}
+    if not body.get("set_area"):
+        return out
+    areas = (await ha([{"type": "config/area_registry/list"}]))[0]
+    by_id = {a["area_id"]: a for a in areas}
+    by_name = {a["name"].lower(): a["area_id"] for a in areas}
+    for it in items:
+        aid = it.get("area_id") if it.get("area_id") in by_id else ""
+        name = (it.get("area_name") or "").strip()
+        if not aid and name:
+            aid = by_name.get(name.lower(), "")
+        if not aid and not name:
+            continue
+        if aid and aid == it.get("current_area_id"):
+            continue
+        out[it["device_id"]] = {"id": aid, "name": by_id[aid]["name"] if aid else name, "create": not aid}
+    return out
+
+
 async def plan(request):
     body = await request.json()
     items = parse_request(body)
@@ -318,8 +339,11 @@ async def plan(request):
         changes, skipped = entity_changes(items, entities)
         if changes:
             usages, unreadable, notes = await collect_usages(body, {c["old"]: c["new"] for c in changes})
+    targets = await resolve_areas(body, items)
+    area_changes = [{"device": it["name"], "from": it.get("current_area") or "", "to": targets[it["device_id"]]["name"],
+                     "create": targets[it["device_id"]]["create"]} for it in items if it["device_id"] in targets]
     return web.json_response({"entities": changes, "skipped": skipped, "usages": usages,
-                              "unreadable": unreadable, "notes": notes})
+                              "unreadable": unreadable, "notes": notes, "areas": area_changes})
 
 
 def check(name, status, detail=""):
@@ -347,6 +371,12 @@ async def verify_changes(items, renamed, opts, wait=True):
         checks.append(check("Gerätenamen", "warn" if z2m else "fail",
                             f"Noch nicht übernommen: {names}" + (
                                 " – Zigbee2MQTT hat die Umbenennung noch nicht bestätigt (Basis-Topic und Z2M-Log prüfen, später erneut prüfen)" if z2m else "")))
+    if opts.get("set_area"):
+        want = [it for it in items if it.get("area_id")]
+        off = [it["name"] for it in want if by_id.get(it["device_id"], {}).get("area_id") != it["area_id"]]
+        if want:
+            checks.append(check("Bereiche (Räume)", "fail" if off else "ok",
+                                f"Bereich nicht gesetzt bei: {', '.join(off)}" if off else f"{len(want)} Gerät(e) sind dem gewählten Bereich zugeordnet"))
     # 2. Entity-IDs
     if renamed:
         existing = {e["entity_id"] for e in (await ha([{"type": "config/entity_registry/list"}]))[0]}
@@ -406,6 +436,21 @@ async def apply(request):
     errors, done = [], []
     entities = (await ha([{"type": "config/entity_registry/list"}]))[0] if z2m_mode else []
     changes, skipped = entity_changes(items, entities) if z2m_mode else ([], [])
+    targets = await resolve_areas(body, items)
+    created = {}
+    for tgt in targets.values():  # fehlende Bereiche in Home Assistant anlegen (einmal je Name)
+        if tgt["create"] and tgt["name"].lower() not in created:
+            ok, res = await ha_try({"type": "config/area_registry/create", "name": tgt["name"]})
+            if ok:
+                created[tgt["name"].lower()] = res["area_id"]
+            else:
+                errors.append({"device": f"Bereich {tgt['name']}", "error": res})
+        if tgt["create"]:
+            tgt["id"] = created.get(tgt["name"].lower(), "")
+    for it in items:
+        tgt = targets.get(it["device_id"])
+        if tgt and tgt["id"]:
+            it["area_id"] = tgt["id"]
 
     for it in items:
         if z2m_mode and it.get("source") == "z2m" and it.get("ieee"):
@@ -415,8 +460,15 @@ async def apply(request):
                 "payload": json.dumps({"from": it["ieee"], "to": it["name"]})}}
         else:
             cmd = {"type": "config/device_registry/update", "device_id": it["device_id"], "name_by_user": it["name"]}
+            if targets.get(it["device_id"], {}).get("id"):
+                cmd["area_id"] = targets[it["device_id"]]["id"]
         ok, res = await ha_try(cmd)
         (done if ok else errors).append(it["device_id"] if ok else {"device": it["name"], "error": res})
+        tgt = targets.get(it["device_id"])
+        if ok and tgt and tgt["id"] and "area_id" not in cmd:  # Z2M-Weg: Bereich separat setzen
+            ok2, res2 = await ha_try({"type": "config/device_registry/update", "device_id": it["device_id"], "area_id": tgt["id"]})
+            if not ok2:
+                errors.append({"device": f"Bereich für {it['name']}", "error": res2})
 
     renamed = []
     for ch in changes:
@@ -473,7 +525,8 @@ async def apply(request):
     checks = await verify_changes(items, renamed, body) if not body.get("skip_verify") else []
     return web.json_response({"ok": not errors, "checks": checks, "renamed_devices": done, "renamed_entities": renamed,
                               "skipped": skipped, "updated_references": changed_refs,
-                              "unreadable": unreadable, "notes": notes, "errors": errors})
+                              "unreadable": unreadable, "notes": notes, "errors": errors,
+                              "items": items, "areas_set": sum(1 for t in targets.values() if t["id"])})
 
 
 async def index(request):
