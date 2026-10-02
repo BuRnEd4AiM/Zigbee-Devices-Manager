@@ -61,6 +61,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
   <h1>🐝 Zigbee Devices Manager</h1>
   <nav>
     <button data-tab="devices" class="on">Geräte</button>
+    <button data-tab="gateways">Gateways</button>
     <button data-tab="scheme">Namensschema</button>
     <button data-tab="export">Export</button>
   </nav>
@@ -68,6 +69,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 <main>
   <div id="banner"></div>
   <section id="tab-devices"></section>
+  <section id="tab-gateways" hidden></section>
   <section id="tab-scheme" hidden></section>
   <section id="tab-export" hidden></section>
 </main>
@@ -98,6 +100,7 @@ const DEFAULT_SCHEME = {
   ]
 };
 
+const DEMO_BRIDGES = [{id: "b1", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 1)"}, {id: "b2", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 2)"}];
 const DEMO_DEVICES = [
   ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0001", "Wohnzimmer", "Wohnzimmer Stehlampe"],
   ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0002", "Wohnzimmer", null],
@@ -113,7 +116,7 @@ const DEMO_DEVICES = [
   ["TRV001", "Eurotronic", "SPZB0001", "0x00124b0022ee0001", "Büro", null],
   ["TRADFRI remote control", "IKEA of Sweden", "E1524", "0x680ae2fffe1a0010", "Wohnzimmer", null],
   ["Zigbee Coordinator", "Texas Instruments", "CC2652P", "0x00124b0030aa0000", "", "Koordinator"]
-].map((d, i) => ({id: "demo" + i, orig_name: d[0], manufacturer: d[1], model: d[2], ieee: d[3], area: d[4],
+].map((d, i) => ({id: "demo" + i, source: "z2m", bridge: i < 8 ? "b1" : "b2", orig_name: d[0], manufacturer: d[1], model: d[2], ieee: d[3], area: d[4],
   is_new: !d[5], name: d[5] || d[3]}));
 
 // ---------- Hilfsfunktionen ----------
@@ -173,7 +176,7 @@ const api = {
     try { store = JSON.parse(localStorage.getItem("zdm-demo-store") || "{}"); } catch (e) {}
     let devices = clone(DEMO_DEVICES);
     try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); devices.forEach(d => { if (n[d.id]) { d.name = n[d.id]; d.is_new = false; } }); } catch (e) {}
-    return {devices, store};
+    return {devices, store, bridges: DEMO_BRIDGES};
   },
   async saveStore(store) {
     if (this.demo) { try { localStorage.setItem("zdm-demo-store", JSON.stringify(store)); } catch (e) {} return; }
@@ -181,7 +184,7 @@ const api = {
     if (!r.ok) throw new Error(await r.text());
   },
   payload(list) {
-    return list.map(([d, name]) => ({device_id: d.id, name, old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee}));
+    return list.map(([d, name]) => ({device_id: d.id, name, old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || "zigbee2mqtt"}));
   },
   opts() { const on = S.renameEntities; return {rename_entities: on, update_references: on && S.updateRefs, update_yaml: on && S.updateYaml, update_nodered: on && S.updateNodered}; },
   async post(path, body) {
@@ -210,6 +213,14 @@ const api = {
     }
     return this.post("api/apply", {items: this.payload(list), ...this.opts()});
   },
+  async permit(b, seconds) {
+    if (this.demo) return;
+    await this.post("api/permit_join", {source: b.source, base_topic: S.gateways[b.id]?.topic || "zigbee2mqtt", time: seconds});
+  },
+  async permitState() {
+    if (this.demo) return {};
+    const r = await fetch("api/permit_state"); return r.ok ? r.json() : {};
+  },
   async verify(last) {
     if (this.demo) return {checks: this.demoChecks(last)};
     return this.post("api/verify", {items: last.items, renamed: last.renamed, ...last.opts});
@@ -224,16 +235,17 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), editing: null, renameEntities: false, updateRefs: true, updateYaml: false, updateNodered: false};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameEntities: false, updateRefs: true, updateYaml: false, updateNodered: false};
 
 function persist() {
   clearTimeout(persist.t);
-  persist.t = setTimeout(() => api.saveStore({scheme: S.scheme, meta: S.meta, planned: S.planned}).catch(e => toast("Speichern fehlgeschlagen: " + e.message)), 300);
+  persist.t = setTimeout(() => api.saveStore({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways}).catch(e => toast("Speichern fehlgeschlagen: " + e.message)), 300);
 }
 const allRows = () => [...S.devices, ...S.planned.map(p => ({id: p.id, name: p.name, orig_name: "", manufacturer: "", model: "", ieee: "", area: "", is_new: false, planned: true}))];
 const roomOf = d => { const id = S.meta[d.id]?.room; return S.scheme.rooms.find(r => r.id === id) || S.scheme.rooms.find(r => d.area && r.name.toLowerCase() === d.area.toLowerCase()); };
 const typeOf = d => S.scheme.types.find(t => t.id === S.meta[d.id]?.type);
-const houseOf = d => S.scheme.houses.find(h => h.id === (S.meta[d.id]?.house || S.scheme.defaultHouse));
+const gwOf = d => S.gateways[d.bridge] || {};
+const houseOf = d => S.scheme.houses.find(h => h.id === (S.meta[d.id]?.house || gwOf(d).house || S.scheme.defaultHouse));
 const useHouse = () => S.scheme.pattern.includes("{house}");
 
 /** Berechnet Namensvorschläge für alle Zeilen mit Raum+Typ, die noch nicht dem Schema entsprechen. */
@@ -258,18 +270,21 @@ function renderDevices() {
     if (S.filter === "new" && !d.is_new) return false;
     if (S.filter === "named" && (d.is_new || d.planned)) return false;
     if (S.filter === "planned" && !d.planned) return false;
+    if (S.gwFilter && d.bridge !== S.gwFilter) return false;
     return !q || [d.name, d.orig_name, d.ieee, d.model, d.manufacturer, d.area].join(" ").toLowerCase().includes(q);
   });
   const roomOpts = sel => `<option value="">–</option>` + S.scheme.rooms.map(r => `<option value="${r.id}"${r.id === sel ? " selected" : ""}>${esc(r.abbr)} · ${esc(r.name)}</option>`).join("");
   const houseOpts = sel => `<option value="">–</option>` + S.scheme.houses.map(h => `<option value="${h.id}"${h.id === sel ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("");
   const typeOpts = sel => `<option value="">–</option>` + S.scheme.types.map(t => `<option value="${t.id}"${t.id === sel ? " selected" : ""}>${esc(t.abbr)} · ${esc(t.name)}</option>`).join("");
   const counts = {all: allRows().length, new: allRows().filter(d => d.is_new).length};
-  const applicable = rows.filter(d => sug.has(d.id) && sug.get(d.id) !== d.name);
+  const applicable = rows.filter(d => sug.has(d.id) && sug.get(d.id) !== d.name && (!S.sel.size || S.sel.has(d.id)));
+  const multiGw = S.bridges.length > 1, gwLabel = id => S.gateways[id]?.label || S.bridges.find(b => b.id === id)?.name || "";
 
   $("#tab-devices").innerHTML = `
     <div class="bar">
       <input id="q" type="search" placeholder="Suchen (Name, IEEE, Modell, Raum)…" value="${esc(S.q)}" style="width:280px">
       <div class="chips">${[["all", "Alle"], ["new", "Neu (" + counts.new + ")"], ["named", "Benannt"], ["planned", "Geplant"]].map(([k, l]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}">${l}</button>`).join("")}</div>
+      ${multiGw ? `<select id="gwf"><option value="">Alle Gateways</option>${S.bridges.map(b => `<option value="${esc(b.id)}"${S.gwFilter === b.id ? " selected" : ""}>${esc(gwLabel(b.id))}</option>`).join("")}</select>` : ""}
       <span style="flex:1"></span>
       <button class="btn" id="addPlanned">＋ Neues Gerät planen</button>
     </div>
@@ -284,11 +299,11 @@ function renderDevices() {
       <label class="sub" title="Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards (mit Sicherung)"><input type="checkbox" id="rRef" ${S.updateRefs ? "checked" : ""} ${S.renameEntities ? "" : "disabled"}> Verweise in Automationen/Dashboards anpassen</label>
       <label class="sub" title="Ersetzt die alten Entity-IDs in allen YAML-Dateien unter /config (Packages, configuration.yaml, …). Danach Konfiguration prüfen und neu laden."><input type="checkbox" id="rYaml" ${S.updateYaml ? "checked" : ""} ${S.renameEntities ? "" : "disabled"}> YAML-Dateien anpassen</label>
       <label class="sub" title="Ersetzt die alten Entity-IDs in den Node-RED-Flows. Node-RED danach neu starten, sonst überschreibt ein Deploy die Änderung."><input type="checkbox" id="rNode" ${S.updateNodered ? "checked" : ""} ${S.renameEntities ? "" : "disabled"}> Node-RED-Flows anpassen</label>
-      <button class="btn primary" id="applyAll" ${applicable.length ? "" : "disabled"}>${applicable.length} Vorschläge übernehmen</button>
+      <button class="btn primary" id="applyAll" ${applicable.length ? "" : "disabled"}>${applicable.length} ${S.sel.size ? "ausgewählte " : ""}Vorschläge übernehmen</button>
     </div>
     <div class="card"><table>
       <thead><tr><th><input type="checkbox" id="selAll" ${rows.length && rows.every(d => S.sel.has(d.id)) ? "checked" : ""}></th>
-        <th>Name</th><th>Neuer Vorschlag</th>${useHouse() ? "<th>Haus</th>" : ""}<th>Raum</th><th>Typ</th><th class="hide-s">Gerät</th><th class="hide-s">IEEE</th><th>Status</th><th></th></tr></thead>
+        <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Gateway</th>" : ""}${useHouse() ? "<th>Haus</th>" : ""}<th>Raum</th><th>Typ</th><th class="hide-s">Gerät</th><th class="hide-s">IEEE</th><th>Status</th><th></th></tr></thead>
       <tbody>${rows.map(d => {
         const s = sug.get(d.id), r = roomOf(d), t = typeOf(d);
         const nameCell = S.editing === d.id
@@ -298,6 +313,7 @@ function renderDevices() {
           <td><input type="checkbox" class="sel" ${S.sel.has(d.id) ? "checked" : ""}></td>
           <td class="name" title="Klicken zum Bearbeiten">${nameCell}</td>
           <td>${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}</td>
+          ${multiGw ? `<td class="sub">${esc(d.planned ? "" : gwLabel(d.bridge))}</td>` : ""}
           ${useHouse() ? `<td><select class="house">${houseOpts(houseOf(d)?.id)}</select></td>` : ""}
           <td><select class="room">${roomOpts(r?.id)}</select></td>
           <td><select class="type">${typeOpts(t?.id)}</select></td>
@@ -306,12 +322,13 @@ function renderDevices() {
           <td><span class="badge ${d.planned ? "plan" : d.is_new ? "new" : "ok"}">${d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}</span></td>
           <td>${s && s !== d.name ? `<button class="btn apply">Übernehmen</button>` : ""}${d.planned ? `<button class="x delP" title="Entfernen">✕</button>` : ""}</td>
         </tr>`;
-      }).join("") || `<tr><td colspan="10" class="empty">Keine Geräte gefunden.</td></tr>`}</tbody>
+      }).join("") || `<tr><td colspan="11" class="empty">Keine Geräte gefunden.</td></tr>`}</tbody>
     </table></div>`;
 
   const root = $("#tab-devices");
   $("#q", root).oninput = e => { S.q = e.target.value; const p = e.target.selectionStart; renderDevices(); const i = $("#q"); i.focus(); i.setSelectionRange(p, p); };
   root.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { S.filter = b.dataset.f; renderDevices(); });
+  $("#gwf", root) && ($("#gwf", root).onchange = e => { S.gwFilter = e.target.value; renderDevices(); });
   $("#rEnt", root).onchange = e => { S.renameEntities = e.target.checked; renderDevices(); };
   $("#rRef", root).onchange = e => S.updateRefs = e.target.checked;
   $("#rYaml", root).onchange = e => S.updateYaml = e.target.checked;
@@ -422,6 +439,46 @@ async function applyBatch(items) {
   persist(); return items.length;
 }
 
+// ---------- Gateways-Tab ----------
+function renderGateways() {
+  const houseOpts = sel => `<option value="">– Standard-Haus –</option>` + S.scheme.houses.map(h => `<option value="${h.id}"${h.id === sel ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("");
+  $("#tab-gateways").innerHTML = `<div class="panel" style="margin-bottom:16px"><h2>Gateways</h2>
+    <p class="sub">Je Gateway (Zigbee2MQTT-Instanz oder ZHA) kannst du einen Namen, den MQTT-Basis-Topic und ein Haus festlegen. Das Haus gilt für alle Geräte dieses Gateways, solange du beim Gerät nichts anderes wählst. „Anlernen“ öffnet das Netz für neue Geräte.</p>
+    <div class="card"><table><thead><tr><th>Gateway</th><th>Bezeichnung</th><th>Basis-Topic</th><th>Haus</th><th>Geräte</th><th>Anlernen</th></tr></thead><tbody>
+    ${S.bridges.map(b => { const g = S.gateways[b.id] || {};
+      return `<tr data-b="${esc(b.id)}"><td>${esc(b.name)}<div class="sub">${b.source === "zha" ? "ZHA" : "Zigbee2MQTT"}</div></td>
+        <td><input class="gl" value="${esc(g.label || "")}" placeholder="${esc(b.name)}"></td>
+        <td>${b.source === "z2m" ? `<input class="gt" value="${esc(g.topic || "")}" placeholder="zigbee2mqtt" style="width:150px">` : "–"}</td>
+        <td><select class="gh">${houseOpts(g.house)}</select></td>
+        <td>${S.devices.filter(d => d.bridge === b.id).length}</td>
+        <td><span class="badge" data-cd="${esc(b.id)}"></span> <button class="btn pj" data-t="240">4 Min anlernen</button> <button class="btn pj" data-t="0">Stopp</button></td></tr>`; }).join("") || `<tr><td colspan="6" class="empty">Keine Gateways gefunden.</td></tr>`}
+    </tbody></table></div></div>`;
+  const root = $("#tab-gateways");
+  root.querySelectorAll("tr[data-b]").forEach(tr => {
+    const id = tr.dataset.b, b = S.bridges.find(x => x.id === id);
+    const set = (k, v) => { S.gateways[id] = {...S.gateways[id], [k]: v}; persist(); };
+    $(".gl", tr).onchange = e => set("label", e.target.value.trim());
+    $(".gt", tr) && ($(".gt", tr).onchange = e => set("topic", e.target.value.trim()));
+    $(".gh", tr).onchange = e => { set("house", e.target.value); renderGateways(); };
+    tr.querySelectorAll(".pj").forEach(btn => btn.onclick = async () => {
+      const t = +btn.dataset.t;
+      try { await api.permit(b, t); S.permitUntil[id] = t ? Date.now() + t * 1000 : 0; toast(t ? "Anlernen aktiv (" + t / 60 + " Min)" : "Anlernen beendet"); setTimeout(pollPermit, 1500); tickPermit(); }
+      catch (e) { toast("Fehler: " + e.message); }
+    });
+  });
+  pollPermit(); tickPermit();
+}
+async function pollPermit() { if (!$("#tab-gateways").hidden) { try { S.permitReal = await api.permitState(); tickPermit(); } catch (e) {} } }
+function tickPermit() {
+  document.querySelectorAll("#tab-gateways [data-cd]").forEach(el => {
+    const id = el.dataset.cd, left = Math.max(0, Math.round(((S.permitUntil[id] || 0) - Date.now()) / 1000)), real = S.permitReal[id];
+    const on = left > 0 || real === "on";
+    el.textContent = on ? (left > 0 ? "aktiv · " + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0") : "aktiv") : "aus";
+    el.style.color = on ? "var(--ok)" : ""; el.style.fontWeight = on ? "600" : "";
+  });
+}
+setInterval(tickPermit, 1000); setInterval(pollPermit, 6000);
+
 // ---------- Schema-Tab ----------
 function renderScheme() {
   const sc = S.scheme, c = sc.counter, r0 = sc.rooms[0], t0 = sc.types[0], r1 = sc.rooms[1] || r0, h0 = sc.houses[0], h1 = sc.houses[1] || h0;
@@ -499,13 +556,14 @@ function renderExport() {
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
   document.querySelectorAll("main section").forEach(s => s.hidden = s.id !== "tab-" + b.dataset.tab);
-  ({devices: renderDevices, scheme: renderScheme, export: renderExport})[b.dataset.tab]();
+  ({devices: renderDevices, gateways: renderGateways, scheme: renderScheme, export: renderExport})[b.dataset.tab]();
 });
 
 (async () => {
   const data = await api.load();
-  S.devices = data.devices;
+  S.devices = data.devices; S.bridges = data.bridges || [];
   const st = data.store || {};
+  S.gateways = st.gateways || {};
   if (st.scheme?.pattern) S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, ...st.scheme};
   S.meta = st.meta || {}; S.planned = st.planned || [];
   if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee-Geräte geladen und umbenannt.</div>`;

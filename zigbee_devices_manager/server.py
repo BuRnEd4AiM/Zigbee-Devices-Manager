@@ -22,6 +22,14 @@ MAX_FILE_BYTES = 5_000_000
 CORE_API = os.environ.get("HA_API_URL", "http://supervisor/core/api")
 
 
+TOPIC_RE = re.compile(r"^[A-Za-z0-9_\-]+(/[A-Za-z0-9_\-]+)*$")
+
+
+def safe_topic(value):
+    """Basis-Topic eines Zigbee2MQTT-Gateways; ungültige Werte (z. B. Wildcards) fallen auf den Standard zurück."""
+    return value if isinstance(value, str) and TOPIC_RE.match(value) else z2m_base_topic()
+
+
 def z2m_base_topic():
     try:
         return json.loads((DATA / "options.json").read_text()).get("z2m_base_topic") or "zigbee2mqtt"
@@ -80,13 +88,20 @@ async def get_state(request):
         {"type": "config/area_registry/list"},
     ])
     area_names = {a["area_id"]: a["name"] for a in areas}
-    out = []
+    out, bridges = [], {}
     for d in devices:
+        if any(dom == "mqtt" and ident.startswith("zigbee2mqtt_bridge_") for dom, ident in d.get("identifiers", [])):
+            bridges[d["id"]] = {"id": d["id"], "source": "z2m", "name": d.get("name_by_user") or d.get("name") or "Zigbee2MQTT"}
+            continue
         found = zigbee_source(d)
         if not found:
             continue
         source, ieee = found
+        bridge = d.get("via_device_id") or source
+        if bridge not in bridges:
+            bridges.setdefault(bridge, {"id": bridge, "source": source, "name": "ZHA" if source == "zha" else "Zigbee2MQTT"})
         out.append({
+            "bridge": bridge,
             "id": d["id"],
             "name": d.get("name_by_user") or d.get("name") or ieee,
             "orig_name": d.get("name") or "",
@@ -97,7 +112,34 @@ async def get_state(request):
             "source": source,
             "area": area_names.get(d.get("area_id"), ""),
         })
-    return web.json_response({"devices": out, "store": load_store()})
+    used = {d["bridge"] for d in out}
+    return web.json_response({"devices": out, "store": load_store(),
+                              "bridges": [b for b in bridges.values() if b["id"] in used or b["source"] == "z2m"]})
+
+
+async def permit_join(request):
+    """Aktiviert/beendet das Anlernen (Pairing) am Zigbee2MQTT-Gateway oder bei ZHA."""
+    body = await request.json()
+    seconds = max(0, min(int(body.get("time", 240)), 254))
+    if body.get("source") == "zha":
+        cmd = {"type": "call_service", "domain": "zha", "service": "permit", "service_data": {"duration": seconds}}
+    else:
+        cmd = {"type": "call_service", "domain": "mqtt", "service": "publish", "service_data": {
+            "topic": f"{safe_topic(body.get('base_topic'))}/bridge/request/permit_join",
+            "payload": json.dumps({"time": seconds})}}
+    await ha([cmd])
+    return web.json_response({"ok": True, "time": seconds})
+
+
+async def permit_state(request):
+    """Liefert je Gateway den Zustand des Z2M-Schalters „Anlernen erlauben“ (falls vorhanden)."""
+    entities, states = await ha([{"type": "config/entity_registry/list"}, {"type": "get_states"}])
+    by_entity = {st["entity_id"]: st["state"] for st in states}
+    out = {}
+    for ent in entities:
+        if ent["entity_id"].startswith("switch.") and "permit_join" in ent["entity_id"] and ent.get("device_id"):
+            out[ent["device_id"]] = by_entity.get(ent["entity_id"])
+    return web.json_response(out)
 
 
 async def put_store(request):
@@ -343,7 +385,7 @@ async def apply(request):
         if z2m_mode and it.get("source") == "z2m" and it.get("ieee"):
             # In Zigbee2MQTT umbenennen; die HA-Entity-IDs ändern wir selbst, damit wir sie kennen
             cmd = {"type": "call_service", "domain": "mqtt", "service": "publish", "service_data": {
-                "topic": f"{z2m_base_topic()}/bridge/request/device/rename",
+                "topic": f"{safe_topic(it.get('base_topic'))}/bridge/request/device/rename",
                 "payload": json.dumps({"from": it["ieee"], "to": it["name"]})}}
         else:
             cmd = {"type": "config/device_registry/update", "device_id": it["device_id"], "name_by_user": it["name"]}
@@ -418,6 +460,8 @@ def make_app():
         web.get("/", index),
         web.get("/api/state", get_state),
         web.put("/api/store", put_store),
+        web.post("/api/permit_join", permit_join),
+        web.get("/api/permit_state", permit_state),
         web.post("/api/plan", plan),
         web.post("/api/apply", apply),
         web.post("/api/verify", verify),
