@@ -1,5 +1,7 @@
 # Zigbee Devices Manager
 
+English version: [README.en.md](README.en.md)
+
 Home-Assistant-Add-on mit eigener Seitenleisten-Spalte („Zigbee Namen“), in der du die Namen
 aller Zigbee-Geräte (ZHA und Zigbee2MQTT) siehst, bearbeitest und nach einem festen
 Namensschema vergibst.
