@@ -1,0 +1,15 @@
+name: Demo bauen
+on:
+  push:
+    paths: ["zigbee_devices_manager/web/**", "scripts/build_demo.py"]
+  workflow_dispatch:
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/build_demo.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zigbee-devices-manager-demo
+          path: demo/zigbee-devices-manager-demo.html
