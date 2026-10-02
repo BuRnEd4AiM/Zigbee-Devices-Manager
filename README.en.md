@@ -14,6 +14,7 @@ German version: [README.md](README.md)
   - Automatic counter per room+type that skips names already in use
   - Counter as Arabic (`01`), Roman (`III`) or letters (`C`)
   - UPPER / lower / as typed
+- **Floors:** token `{floor}` for storeys (e.g. H0 = ground floor, H1 = 1st floor, H2, H3 … or S2/S3 – abbreviations are free). Floors from Home Assistant are imported; a device's floor follows its room/HA area but can be overridden per device or via multi-select. Example: `{floor}-{room}-{type}{nr}` → `H1-wzfl-lband01`. House and floor can be combined.
 - **Rooms from Home Assistant:** all HA areas are imported as rooms automatically (abbreviation suggested and editable); devices get their HA area preselected as room. "⟳ Bereiche aus HA" in the scheme tab re-syncs; deleted rooms are not re-added on their own.
 - **House prefix:** patterns with `{house}`, e.g. `{house}-{room}-{type}{nr}` → `H1-wzfl-lband01`. Houses, rooms and types with their own abbreviations, a default house plus per-device choice
 - Multi-select → assign room/type → "apply suggestions"
