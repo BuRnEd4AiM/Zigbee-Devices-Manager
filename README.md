@@ -67,12 +67,13 @@ herunterladen und im Browser öffnen. Neu erzeugen mit `python3 scripts/build_de
   Nicht geändert werden `.storage`, `custom_components`, `secrets.yaml`.
 - Echtes Anlernen neuer Geräte passiert weiterhin in ZHA/Z2M; neue Geräte erscheinen hier automatisch als „neu“.
 - Schema und Zuweisungen liegen in `/data/store.json` des Add-ons.
+- Änderungen je Version: [`zigbee_devices_manager/CHANGELOG.md`](zigbee_devices_manager/CHANGELOG.md) – Home Assistant zeigt sie im Update-Dialog.
 
 ## Fehlersuche
 
 - Zeigt die Oberfläche **„Verbindung zu Home Assistant fehlgeschlagen“**, steht darunter die Fehlermeldung; „Diagnose öffnen“ (`/api/diag`) und das Add-on-Log zeigen, welcher Schritt scheitert (Token, Geräte-Registry, Entitäten-Registry, eingebundene Ordner).
 - **Demo-Daten** erscheinen nur noch, wenn die Datei lokal geöffnet wird oder kein Add-on-Server antwortet.
-- Nach Code-Änderungen im Repository muss die `version` in `zigbee_devices_manager/config.yaml` steigen, sonst bietet Home Assistant kein Update an.
+- Nach Code-Änderungen im Repository muss die `version` in `zigbee_devices_manager/config.yaml` steigen, sonst bietet Home Assistant kein Update an. Zu jeder neuen Version gehört ein Abschnitt `## <version>` in `zigbee_devices_manager/CHANGELOG.md` – diesen Text zeigt Home Assistant im Update-Dialog.
 
 ## Entwicklung
 
