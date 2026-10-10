@@ -22,6 +22,7 @@ Namensschema vergibst.
 - **Mehrere Zigbee2MQTT-Instanzen:** Vor dem Umbenennen fragt das Add-on bei MQTT (`<base>/bridge/devices`) nach, in welcher Z2M-Instanz das Gerät (über seine IEEE) wirklich steckt, und schickt die Anfrage dorthin – unabhängig vom eingetragenen Gateway-Topic. Bleibt Z2Ms Antwort aus, prüft es, ob Z2M den neuen Namen schon führt.
 - **Verständliche Vorschau:** Ändert sich keine Entity-ID, sagt der Dialog warum (Namen enthalten den neuen Namen schon / keine ID beginnt mit dem alten Namen / keine Entitäten) und listet die gefundenen IDs. Zusätzlich wird der gemeinsame Anfang der Entity-IDs eines Geräts als Vorbild genutzt.
 - **Haus/Etage im Namen hat Vorrang:** Steht am Anfang eines Namens z. B. `S2-…`, werden Haus und Etage daraus gesetzt, auch wenn Raum oder Typ im Namen unbekannt sind. Räume aus HA-Bereichen werden nur automatisch gewählt, wenn sie zu Haus und Etage des Geräts passen – ein Bereich wie „Bad (H1)“ wird einem S2-Gerät nicht zugeordnet (Code im Raumnamen, z. B. `(H1)`, wird erkannt). Das gilt auch für Raum-Kürzel im Namen: teilen sich „Bad (H1)“ und „Bad (S2)“ das Kürzel `BAD`, wählt `S2-BAD-…` den Raum mit dem Code `(S2)`. „⟳ Aus Namen zuordnen“ verwirft früher gespeicherte, dazu nicht passende Räume.
+- **Umbenennen direkt in Zigbee2MQTT, sauber in HA übernommen:** Standardmäßig benennt das Add-on Z2M-Geräte wie Z2Ms eigener Dialog um (Friendly-Name, MQTT-Topic und – mit „Entity-IDs in HA anpassen“ – die Entity-IDs, `homeassistant_rename`). Danach wartet es, bis Z2M das Gerät neu in Home Assistant angemeldet hat, und zieht HA nach: Ein alter eigener Name in HA (`name_by_user`), der den neuen Z2M-Namen verdecken würde, wird entfernt – HA zeigt dann den Namen aus Z2M (heißt das Gerät in Z2M schon so, wird nur HA nachgezogen). Der Bereich (Raum) wird erst danach gesetzt, damit er beim Neuanlegen durch Z2M nicht verloren geht. Die Prüfung zeigt zusätzlich, ob Z2M selbst den neuen Namen führt. Z2M-Geräte, die schon in Z2M benannt sind, gelten nicht mehr als „neu“. Die Haken beim Umbenennen merkt sich das Add-on.
 - **Einzeln wählbare Optionen:** „In Zigbee2MQTT umbenennen“, „Entity-IDs in HA anpassen“, „Verweise in Automationen/Dashboards“, „YAML-Dateien“ und „Node-RED-Flows“ lassen sich unabhängig voneinander anklicken. Die Verweis-Optionen brauchen geänderte Entity-IDs und setzen deshalb den Haken bei „Entity-IDs“ mit; ohne ihn passiert nur, was angehakt ist.
 - **Vorhandene Namen erkennen und zuordnen:** Das Add-on zerlegt bestehende Namen nach deinem Muster und deinen Kürzeln (z. B. `H1-WZFL-KON03` → Haus/Etage H1, Raum WZFL, Typ KON, Nr. 03) und wählt Haus, Etage, Raum und Typ automatisch aus – beim Start für Geräte ohne eigene Auswahl, per Klick auf „⟳ Aus Namen zuordnen“ für alle. Passt der Name schon, bleibt er samt Nummer unverändert („✓ aktuell“), neue Nummern füllen nur freie Plätze. Der Filter „Passt nicht (n)“ zeigt Namen, die das Muster nicht erkennt.
 - **Zigbee2MQTT-Basis-Topic automatisch erkennen:** Das Add-on sucht per MQTT die laufenden Z2M-Instanzen (`<base>/bridge/info`) und trägt den Basis-Topic je Gateway automatisch ein (Zuordnung über die IEEE des Koordinators). Im Tab „Gateways“ zeigt „Basis-Topics erkennen“ alle gefundenen Topics; bei ausbleibender Antwort nennt die Fehlermeldung die gefundenen Topics.
@@ -36,7 +37,7 @@ Namensschema vergibst.
 - **Anlernen:** Im Tab „Gateways“ öffnet „4 Min anlernen“ das Netz (Z2M per `bridge/request/permit_join`, ZHA per `zha.permit`), „Stopp“ beendet es; Status mit Countdown.
 - **Mehrere Geräte auf einmal:** Häkchen setzen → Haus/Raum/Typ zuweisen → „ausgewählte Vorschläge übernehmen“ (ohne Auswahl: alle sichtbaren)
 - Geplante Geräte reservieren Namen/Nummern
-- Optional: Entitäts-IDs mitumbenennen
+- Entity-IDs mitumbenennen (Standard: an, abwählbar)
 - Export als CSV/JSON, Schema-Export/-Import
 
 ## Installation
@@ -54,10 +55,10 @@ herunterladen und im Browser öffnen. Neu erzeugen mit `python3 scripts/build_de
 
 ## Hinweise
 
-- Standard: Umbenennen in der Home-Assistant-Geräte-Registry (`name_by_user`).
-- **Entity-IDs mitziehen:** Zeigt vor dem Umbenennen eine Vorschau der neuen Entity-IDs. Bei Zigbee2MQTT wird das Gerät
-  zusätzlich direkt in Z2M umbenannt (per `mqtt.publish` an `<base_topic>/bridge/request/device/rename`; Basis-Topic in den
-  Add-on-Optionen: `z2m_base_topic`, Standard `zigbee2mqtt`).
+- Zigbee2MQTT-Geräte werden standardmäßig in Z2M umbenannt (per `mqtt.publish` an `<base_topic>/bridge/request/device/rename`;
+  Basis-Topic je Gateway oder in den Add-on-Optionen: `z2m_base_topic`, Standard `zigbee2mqtt`); Home Assistant übernimmt den
+  Namen von Z2M. ZHA-Geräte (oder Z2M ohne den Haken) werden in der Home-Assistant-Geräte-Registry umbenannt (`name_by_user`).
+- **Entity-IDs mitziehen:** Zeigt vor dem Umbenennen eine Vorschau der neuen Entity-IDs.
 - **Verweise anpassen:** Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards, die über die
   Oberfläche gepflegt werden. Vorschau vorab, Sicherung der alten Konfiguration unter `/data/backups/`.
   Optional zusätzlich: **YAML-Dateien** unter `/config` (Packages, `configuration.yaml`, YAML-Dashboards …, reiner Textersatz

@@ -131,7 +131,8 @@ async def get_state(request):
             "id": d["id"],
             "name": d.get("name_by_user") or d.get("name") or ieee,
             "orig_name": d.get("name") or "",
-            "is_new": not d.get("name_by_user"),
+            # Z2M liefert den Friendly-Name als Gerätenamen; neu ist ein Z2M-Gerät nur, solange es noch seine IEEE als Namen trägt
+            "is_new": not d.get("name_by_user") and (source == "zha" or (d.get("name") or "").lower() in ("", ieee.lower())),
             "manufacturer": d.get("manufacturer") or "",
             "model": d.get("model") or "",
             "ieee": ieee,
@@ -552,6 +553,45 @@ def use_z2m(body):
     return bool(body.get("rename_z2m", body.get("rename_entities")))
 
 
+async def adopt_z2m_names(items, targets, timeout=15):
+    """Zieht Home Assistant nach einer Umbenennung in Zigbee2MQTT sauber nach. Z2M meldet das Gerät per Discovery
+    neu an (mit „Entity-ID aktualisieren“ sogar über Löschen und Neuanlegen), daher erst darauf warten. Danach:
+    ein eigener HA-Name (name_by_user) würde den neuen Z2M-Namen verdecken und wird entfernt – HA folgt dann Z2M;
+    ist Z2Ms Anmeldung ausgeblieben, wird der neue Name direkt in HA gesetzt. Der Bereich kommt zuletzt, damit
+    er beim Neuanlegen nicht verloren geht. Liefert Fehler."""
+    by_ieee = {it["ieee"].lower(): it for it in items}
+    deadline = time.monotonic() + timeout
+    while True:
+        found = {}
+        for d in (await ha([{"type": "config/device_registry/list"}]))[0]:
+            src = zigbee_source(d)
+            if src and src[0] == "z2m" and src[1].lower() in by_ieee:
+                found[src[1].lower()] = d
+        if all(found.get(k, {}).get("name") == it["name"] for k, it in by_ieee.items()) or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(1)
+    errors = []
+    for key, it in by_ieee.items():
+        dev = found.get(key)
+        if not dev:
+            errors.append({"device": it["name"], "error": "Nach der Umbenennung in Zigbee2MQTT nicht mehr in Home Assistant gefunden – Name/Bereich dort prüfen"})
+            continue
+        cmd = {"type": "config/device_registry/update", "device_id": dev["id"]}
+        if dev.get("name") == it["name"]:
+            if dev.get("name_by_user"):
+                cmd["name_by_user"] = None
+        elif dev.get("name_by_user") != it["name"]:
+            cmd["name_by_user"] = it["name"]
+        tgt = targets.get(it["device_id"])
+        if tgt and tgt["id"] and dev.get("area_id") != tgt["id"]:
+            cmd["area_id"] = tgt["id"]
+        if len(cmd) > 2:
+            ok, res = await ha_try(cmd)
+            if not ok:
+                errors.append({"device": it["name"], "error": res})
+    return errors
+
+
 def check(name, status, detail=""):
     return {"name": name, "status": status, "detail": detail}
 
@@ -579,6 +619,16 @@ async def verify_changes(items, renamed, opts, wait=True):
         checks.append(check("Gerätenamen", "warn" if z2m else "fail",
                             f"Noch nicht übernommen: {names}" + (
                                 " – Zigbee2MQTT hat die Umbenennung noch nicht bestätigt (Basis-Topic und Z2M-Log prüfen, später erneut prüfen)" if z2m else "")))
+    z2m_items = [it for it in items if it.get("source") == "z2m" and it.get("ieee")] if use_z2m(opts) and not opts.get("skip_names") else []
+    if z2m_items:  # Stand in Zigbee2MQTT selbst (<base>/bridge/devices)
+        known = await z2m_devices()
+        off = [f"{it['name']} (in Z2M: {known[k]['name'] if k in known else 'nicht gefunden'})"
+               for it in z2m_items if known.get(k := it["ieee"].lower(), {}).get("name") != it["name"]]
+        if not known:
+            checks.append(check("Zigbee2MQTT", "warn", "Geräteliste von Zigbee2MQTT (bridge/devices) nicht lesbar – Namen in Z2M nicht geprüft"))
+        else:
+            checks.append(check("Zigbee2MQTT", "fail" if off else "ok",
+                                f"Noch nicht übernommen: {', '.join(off)}" if off else f"{len(z2m_items)} Gerät(e) heißen auch in Zigbee2MQTT wie geplant"))
     if opts.get("set_area"):
         want = [it for it in items if it.get("area_id")]
         off = [it["name"] for it in want if by_id.get(it["device_id"], {}).get("area_id") != it["area_id"]]
@@ -681,6 +731,7 @@ async def apply(request):
 
     failed_ids = set()
     owners = {}
+    in_z2m = []  # in Zigbee2MQTT umbenannt: Name und Bereich in HA werden danach nachgezogen
     if z2m_on and any(i.get("source") == "z2m" for i in items):
         prog(pid, "Suche die Zigbee2MQTT-Instanz der Geräte …", 0)
         owners = await z2m_devices()
@@ -690,7 +741,10 @@ async def apply(request):
             # In Zigbee2MQTT umbenennen und Z2Ms Antwort abwarten; die HA-Entity-IDs ändern wir selbst, damit wir sie kennen
             owner = owners.get(it["ieee"].lower())
             base = owner["base"] if owner else safe_topic(it.get("base_topic"))  # die Instanz, in der das Gerät wirklich steckt
-            result = await z2m_request(base, "device/rename", {"from": it["ieee"], "to": it["name"], "homeassistant_rename": z2m_mode})
+            if owner and owner["name"] == it["name"]:
+                result = {"status": "ok"}  # heißt in Z2M schon so (Z2M meldete sonst „already in use“): nur HA nachziehen
+            else:
+                result = await z2m_request(base, "device/rename", {"from": it["ieee"], "to": it["name"], "homeassistant_rename": z2m_mode})
             if result.get("status") == "timeout":  # keine Antwort: prüfen, ob Z2M den neuen Namen trotzdem schon führt
                 now = (await z2m_devices()).get(it["ieee"].lower())
                 if now and now["name"] == it["name"]:
@@ -699,7 +753,8 @@ async def apply(request):
             if failure and owner is None and owners:
                 failure += f" Das Gerät {it['ieee']} wurde in keiner gefundenen Zigbee2MQTT-Instanz gelistet."
             ok, res = (failure is None), failure
-            cmd = {}
+            if ok:
+                in_z2m.append(it)
         else:
             cmd = {"type": "config/device_registry/update", "device_id": it["device_id"], "name_by_user": it["name"]}
             if targets.get(it["device_id"], {}).get("id"):
@@ -711,11 +766,9 @@ async def apply(request):
             failed_ids.add(it["device_id"])
             errors.append({"device": it["name"], "device_id": it["device_id"], "error": res})
         prog(pid, f"Benannt ({n}/{len(items)}): {it['name']}")
-        tgt = targets.get(it["device_id"])
-        if ok and tgt and tgt["id"] and "area_id" not in cmd:  # Z2M-Weg: Bereich separat setzen
-            ok2, res2 = await ha_try({"type": "config/device_registry/update", "device_id": it["device_id"], "area_id": tgt["id"]})
-            if not ok2:
-                errors.append({"device": f"Bereich für {it['name']}", "error": res2})
+    if in_z2m:
+        prog(pid, "Warte, bis Home Assistant die neuen Namen aus Zigbee2MQTT übernimmt …", 0)
+        errors += await adopt_z2m_names(in_z2m, targets)
 
     renamed = []
     z2m_ok = {i["device_id"] for i in items if i["device_id"] in done and i.get("source") == "z2m" and z2m_on}
