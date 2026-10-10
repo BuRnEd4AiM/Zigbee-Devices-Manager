@@ -255,6 +255,7 @@ const api = {
   },
   demoChecks(last) {
     const o = last.opts, c = [{name: "Gerätenamen", status: "ok", detail: last.items.length + " Gerät(e) heißen jetzt wie geplant"}];
+    if (o.rename_z2m) c.push({name: "Zigbee2MQTT", status: "ok", detail: last.items.length + " Gerät(e) heißen auch in Zigbee2MQTT wie geplant"});
     if (o.rename_entities) c.push({name: "Entity-IDs", status: "ok", detail: "Beispiel: alte IDs gibt es nicht mehr"});
     if (o.update_references || o.update_yaml || o.update_nodered) c.push({name: "Verweise", status: "ok", detail: "Beispiel: keine alten Entity-IDs mehr gefunden"});
     if (o.update_nodered) c.push({name: "Node-RED", status: "info", detail: "Node-RED jetzt neu starten"});
@@ -264,11 +265,13 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameZ2m: false, renameEntities: false, setArea: true, updateRefs: false, updateYaml: false, updateNodered: false};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: false, updateYaml: false, updateNodered: false};
+/** Haken beim Umbenennen – werden im Store gemerkt. */
+const OPTION_KEYS = ["setArea", "renameZ2m", "renameEntities", "updateRefs", "updateYaml", "updateNodered"];
 
 function persist() {
   clearTimeout(persist.t);
-  persist.t = setTimeout(() => api.saveStore({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways}).catch(e => toast("Speichern fehlgeschlagen: " + e.message)), 300);
+  persist.t = setTimeout(() => api.saveStore({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways, options: Object.fromEntries(OPTION_KEYS.map(k => [k, S[k]]))}).catch(e => toast("Speichern fehlgeschlagen: " + e.message)), 300);
 }
 const allRows = () => [...S.devices, ...S.planned.map(p => ({id: p.id, name: p.name, orig_name: "", manufacturer: "", model: "", ieee: "", area: "", is_new: false, planned: true}))];
 /** Raum: eigene Auswahl, sonst Raum des HA-Bereichs – aber nur, wenn er zu Haus/Etage des Geräts passt (z. B. kein „Bad (H1)“ für ein S2-Gerät). */
@@ -488,8 +491,8 @@ function renderDevices() {
       <button class="btn" id="bArea" ${S.sel.size ? "" : "disabled"} title="Ordnet die ausgewählten Geräte ihrem gewählten Raum in Home Assistant zu – ohne sie umzubenennen">Raum in HA setzen</button>
       <span style="flex:1"></span>
       <label class="sub" title="Ordnet das Gerät in Home Assistant dem gewählten Raum (Bereich) zu; fehlende Bereiche werden angelegt"><input type="checkbox" id="rArea" ${S.setArea ? "checked" : ""}> Raum als Bereich in HA setzen</label>
-      <label class="sub" title="Benennt Zigbee2MQTT-Geräte direkt in Z2M um (Friendly-Name und MQTT-Topic), nicht nur in Home Assistant. Z2M bestätigt die Umbenennung."><input type="checkbox" id="rZ2m" ${S.renameZ2m ? "checked" : ""}> In Zigbee2MQTT umbenennen</label>
-      <label class="sub" title="Passt die Entity-IDs (z. B. light.alt_name → light.neu_name) in Home Assistant an"><input type="checkbox" id="rEnt" ${S.renameEntities ? "checked" : ""}> Entity-IDs in HA anpassen</label>
+      <label class="sub" title="Benennt Zigbee2MQTT-Geräte direkt in Z2M um (Friendly-Name und MQTT-Topic) – wie Z2Ms eigener Dialog. Home Assistant übernimmt den Namen danach von Z2M; ein abweichender alter Name in HA wird entfernt."><input type="checkbox" id="rZ2m" ${S.renameZ2m ? "checked" : ""}> In Zigbee2MQTT umbenennen</label>
+      <label class="sub" title="Passt die Entity-IDs (z. B. light.alt_name → light.neu_name) in Home Assistant an – entspricht „Home Assistant Entity-ID aktualisieren“ in Zigbee2MQTT"><input type="checkbox" id="rEnt" ${S.renameEntities ? "checked" : ""}> Entity-IDs in HA anpassen</label>
       <label class="sub" title="Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards (mit Sicherung). Setzt den Haken bei „Entity-IDs“ automatisch mit."><input type="checkbox" id="rRef" ${S.updateRefs && S.renameEntities ? "checked" : ""}> Verweise in Automationen/Dashboards anpassen</label>
       <label class="sub" title="Ersetzt die alten Entity-IDs in allen YAML-Dateien unter /config (Packages, configuration.yaml, …). Danach Konfiguration prüfen und neu laden. Setzt den Haken bei „Entity-IDs“ automatisch mit."><input type="checkbox" id="rYaml" ${S.updateYaml && S.renameEntities ? "checked" : ""}> YAML-Dateien anpassen</label>
       <label class="sub" title="Ersetzt die alten Entity-IDs in den Node-RED-Flows. Node-RED danach neu starten. Setzt den Haken bei „Entity-IDs“ automatisch mit."><input type="checkbox" id="rNode" ${S.updateNodered && S.renameEntities ? "checked" : ""}> Node-RED-Flows anpassen</label>
@@ -526,12 +529,12 @@ function renderDevices() {
   $("#gwf", root) && ($("#gwf", root).onchange = e => { S.gwFilter = e.target.value; renderDevices(); });
   $("#floorOn", root) && ($("#floorOn", root).onclick = () => { S.scheme.pattern = "{floor}-" + S.scheme.pattern; S.scheme.case = "keep"; persist(); toast("Muster: " + S.scheme.pattern); renderDevices(); });
   $("#houseOn", root) && ($("#houseOn", root).onclick = () => { S.scheme.pattern = "{house}-" + S.scheme.pattern; S.scheme.case = "keep"; persist(); toast("Muster: " + S.scheme.pattern); renderDevices(); });
-  $("#rArea", root).onchange = e => { S.setArea = e.target.checked; };
-  $("#rZ2m", root).onchange = e => { S.renameZ2m = e.target.checked; };
+  $("#rArea", root).onchange = e => { S.setArea = e.target.checked; persist(); };
+  $("#rZ2m", root).onchange = e => { S.renameZ2m = e.target.checked; persist(); };
   // Die Haken sind einzeln anklickbar; Verweise brauchen geänderte Entity-IDs und setzen den Entity-Haken deshalb mit
-  $("#rEnt", root).onchange = e => { S.renameEntities = e.target.checked; if (!e.target.checked) S.updateRefs = S.updateYaml = S.updateNodered = false; renderDevices(); };
+  $("#rEnt", root).onchange = e => { S.renameEntities = e.target.checked; if (!e.target.checked) S.updateRefs = S.updateYaml = S.updateNodered = false; persist(); renderDevices(); };
   for (const [id, key] of [["#rRef", "updateRefs"], ["#rYaml", "updateYaml"], ["#rNode", "updateNodered"]])
-    $(id, root).onchange = e => { S[key] = e.target.checked; if (e.target.checked) S.renameEntities = true; renderDevices(); };
+    $(id, root).onchange = e => { S[key] = e.target.checked; if (e.target.checked) S.renameEntities = true; persist(); renderDevices(); };
   $("#selAll", root).onchange = e => { rows.forEach(d => e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id)); renderDevices(); };
   $("#fromNames", root).onclick = () => {
     const r = syncFromNames(true);
@@ -573,7 +576,8 @@ function renderDevices() {
       if (save && v && v !== d.name) await applyBatch([[d, v]]);
       renderDevices();
     };
-    edit.onkeydown = e => { if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); };
+    // preventDefault: sonst löst dieselbe Enter-Taste im gerade geöffneten Vorschau-Dialog „Abbrechen“ aus
+    edit.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); done(true); } if (e.key === "Escape") done(false); };
     edit.onblur = () => S.editing && done(true);
     edit.onclick = e => e.stopPropagation();
   }
@@ -881,6 +885,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   S.areas = data.areas || []; S.haFloors = data.floors || [];
   if (st.scheme?.pattern) S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, floors: clone(DEFAULT_SCHEME.floors), ...st.scheme};
   S.meta = st.meta || {}; S.planned = st.planned || [];
+  for (const k of OPTION_KEYS) if (typeof st.options?.[k] === "boolean") S[k] = st.options[k];
   if (api.error) $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--new)"><b>Verbindung zu Home Assistant fehlgeschlagen.</b> Das Add-on läuft, kann aber keine Geräte laden – keine Demo-Daten.<br><code>${esc(api.error)}</code><br><button class="btn" style="margin-top:8px" onclick="location.reload()">Erneut versuchen</button> <a href="api/diag" target="_blank">Diagnose öffnen</a> <span class="sub">(Details auch im Add-on-Log)</span></div>`;
   else if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee-Geräte geladen und umbenannt.</div>`;
   S.scheme.floors = S.scheme.floors || clone(DEFAULT_SCHEME.floors); S.scheme.defaultFloor = S.scheme.defaultFloor || "";
