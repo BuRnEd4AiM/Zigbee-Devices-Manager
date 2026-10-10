@@ -63,3 +63,4 @@ a browser. Rebuild with `python3 scripts/build_demo.py` (also available as a Git
   `.storage`, `custom_components` and `secrets.yaml` are never touched.
 - Pairing new devices still happens in ZHA/Z2M; they show up here as "new" automatically.
 - Scheme and assignments are stored in the add-on's `/data/store.json`.
+- Changes per version: [`zigbee_devices_manager/CHANGELOG.md`](zigbee_devices_manager/CHANGELOG.md) (German) – Home Assistant shows it in the update dialog. Every new version needs a `## <version>` section there.
