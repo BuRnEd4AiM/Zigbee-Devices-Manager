@@ -55,6 +55,10 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 .preview{background:var(--chip);border-radius:6px;padding:10px;font-family:ui-monospace,monospace;line-height:1.8}
 .tok{cursor:pointer;background:var(--chip);border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-family:ui-monospace,monospace;font-size:12px}
 .x{background:none;border:0;color:var(--muted);cursor:pointer;font-size:16px}
+.links{display:flex;gap:4px}
+.lnk{display:inline-block;font-size:12px;padding:2px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);text-decoration:none;white-space:nowrap;cursor:pointer}
+.lnk:hover{border-color:var(--accent);color:var(--accent)}
+.lnk.off{opacity:.45}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s}
 .toast.show{opacity:1}
 @media(max-width:1250px){.hide-m{display:none}}
@@ -108,7 +112,8 @@ const DEFAULT_SCHEME = {
 
 const DEMO_FLOORS = [{id: "fl_eg", name: "Erdgeschoss", level: 0}, {id: "fl_og", name: "Obergeschoss", level: 1}, {id: "fl_ug", name: "Untergeschoss", level: -1}];
 const DEMO_AREAS = [["Wohnzimmer", "fl_eg"], ["Küche", "fl_eg"], ["Flur", "fl_eg"], ["Schlafzimmer", "fl_og"], ["Bad", "fl_og"], ["Büro", "fl_og"], ["Terrasse", "fl_eg"], ["Keller", "fl_ug"]].map(([n, f]) => ({id: "area_" + n.toLowerCase().replace("ü", "ue"), name: n, floor_id: f}));
-const DEMO_BRIDGES = [{id: "b1", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 1)"}, {id: "b2", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 2)"}];
+const DEMO_BRIDGES = [{id: "b1", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 1)", config_url: "http://192.168.1.20:8080/#/settings"}, {id: "b2", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 2)"}];
+const DEMO_UIS = [{slug: "45df7312_zigbee2mqtt", name: "Zigbee2MQTT", url: "/api/hassio_ingress/demo-z2m-1/", state: "started"}, {slug: "45df7312_zigbee2mqtt_edge", name: "Zigbee2MQTT Edge", url: "/api/hassio_ingress/demo-z2m-2/", state: "started"}];
 const DEMO_DEVICES = [
   ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0001", "Wohnzimmer", "Wohnzimmer Stehlampe"],
   ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0002", "Wohnzimmer", "WZ_LP_05"],
@@ -125,7 +130,7 @@ const DEMO_DEVICES = [
   ["TRADFRI remote control", "IKEA of Sweden", "E1524", "0x680ae2fffe1a0010", "Wohnzimmer", null],
   ["Zigbee Coordinator", "Texas Instruments", "CC2652P", "0x00124b0030aa0000", "", "Koordinator"]
 ].map((d, i) => ({id: "demo" + i, source: "z2m", bridge: i < 8 ? "b1" : "b2", orig_name: d[0], manufacturer: d[1], model: d[2], ieee: d[3], area: d[4],
-  is_new: !d[5], name: d[5] || d[3], area_id: d[4] ? "area_" + d[4].toLowerCase().replace("ü", "ue") : ""}));
+  is_new: !d[5], name: d[5] || d[3], area_id: d[4] ? "area_" + d[4].toLowerCase().replace("ü", "ue") : "", config_url: i < 8 ? "http://192.168.1.20:8080/#/device/0/" + d[3] + "/info" : ""}));
 
 // ---------- Hilfsfunktionen ----------
 const $ = (s, el = document) => el.querySelector(s);
@@ -253,6 +258,37 @@ const api = {
     if (this.demo) return {checks: this.demoChecks(last)};
     return this.post("api/verify", {items: last.items, renamed: last.renamed, ...last.opts});
   },
+  async z2mUis() {
+    if (this.demo) return DEMO_UIS;
+    const r = await fetch("api/z2m_uis"); return r.ok ? r.json() : [];
+  },
+  // ---- Sicherungen (Demo: nur im localStorage dieses Browsers) ----
+  demoBackups() { try { return JSON.parse(localStorage.getItem("zdm-demo-backups") || "[]"); } catch (e) { return []; } },
+  async backups() {
+    if (this.demo) return {dir: "nur in diesem Browser (Demo)", persistent: false, keep: 10,
+      items: this.demoBackups().map(b => ({file: b.file, created: b.created, reason: b.reason, devices: b.devices.length, assigned: Object.keys(b.store.meta || {}).length}))};
+    const r = await fetch("api/backups"); if (!r.ok) throw new Error(await r.text()); return r.json();
+  },
+  async backup(file) {
+    if (this.demo) return this.demoBackups().find(b => b.file === file);
+    const r = await fetch("api/backups/" + encodeURIComponent(file)); if (!r.ok) throw new Error(await r.text()); return r.json();
+  },
+  async createBackup() {
+    if (this.demo) {
+      const list = [{file: "sicherung-demo-" + Date.now() + "-manuell.json", created: new Date().toISOString(), reason: "manuell", store: storeData(),
+        devices: S.devices.map(d => ({id: d.id, ieee: d.ieee, source: d.source, name: d.name, area: d.area, manufacturer: d.manufacturer, model: d.model}))}, ...this.demoBackups()].slice(0, 10);
+      try { localStorage.setItem("zdm-demo-backups", JSON.stringify(list)); } catch (e) {} return;
+    }
+    await this.post("api/backups", {});
+  },
+  async restoreBackup(payload) {
+    if (this.demo) {
+      const b = payload.file ? this.demoBackups().find(x => x.file === payload.file) : payload.backup, store = b?.store || b;
+      if (!store?.scheme?.pattern) throw new Error("Keine gültige Sicherung (Namensschema fehlt)");
+      localStorage.setItem("zdm-demo-store", JSON.stringify(store)); return;
+    }
+    await this.post("api/backups/restore", payload);
+  },
   demoChecks(last) {
     const o = last.opts, c = [{name: "Gerätenamen", status: "ok", detail: last.items.length + " Gerät(e) heißen jetzt wie geplant"}];
     if (o.rename_z2m) c.push({name: "Zigbee2MQTT", status: "ok", detail: last.items.length + " Gerät(e) heißen auch in Zigbee2MQTT wie geplant"});
@@ -265,13 +301,16 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: false, updateYaml: false, updateNodered: false};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], z2mUis: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, storeLoaded: false, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: false, updateYaml: false, updateNodered: false};
 /** Haken beim Umbenennen – werden im Store gemerkt. */
 const OPTION_KEYS = ["setArea", "renameZ2m", "renameEntities", "updateRefs", "updateYaml", "updateNodered"];
 
+const storeData = () => ({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways, options: Object.fromEntries(OPTION_KEYS.map(k => [k, S[k]]))});
 function persist() {
+  // Konnten die gespeicherten Einstellungen nicht geladen werden (HA nicht erreichbar), würde Speichern sie mit Standardwerten überschreiben
+  if (!S.storeLoaded) return;
   clearTimeout(persist.t);
-  persist.t = setTimeout(() => api.saveStore({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways, options: Object.fromEntries(OPTION_KEYS.map(k => [k, S[k]]))}).catch(e => toast("Speichern fehlgeschlagen: " + e.message)), 300);
+  persist.t = setTimeout(() => api.saveStore(storeData()).catch(e => toast("Speichern fehlgeschlagen: " + e.message)), 300);
 }
 const allRows = () => [...S.devices, ...S.planned.map(p => ({id: p.id, name: p.name, orig_name: "", manufacturer: "", model: "", ieee: "", area: "", is_new: false, planned: true}))];
 /** Raum: eigene Auswahl, sonst Raum des HA-Bereichs – aber nur, wenn er zu Haus/Etage des Geräts passt (z. B. kein „Bad (H1)“ für ein S2-Gerät). */
@@ -345,6 +384,61 @@ const floorOf = d => {
   const room = roomOf(d), area = S.areas.find(a => a.id === (room?.area_id || d.area_id));
   return sc.floors.find(f => area?.floor_id && f.floor_id === area.floor_id) || sc.floors.find(f => f.id === sc.defaultFloor);
 };
+
+// ---------- Sprung zu Zigbee2MQTT / Home Assistant ----------
+/** Zigbee2MQTT-Instanz (aus bridge/info) eines Gateways: über die Koordinator-IEEE, sonst über den Basis-Topic. */
+function z2mInfoOf(bridgeId) {
+  const b = S.bridges.find(x => x.id === bridgeId), topic = S.gateways[bridgeId]?.topic;
+  return S.z2mBases.find(f => f.ieee && b?.ieee && f.ieee.toLowerCase() === b.ieee.toLowerCase()) || S.z2mBases.find(f => topic && f.base_topic === topic);
+}
+/** Adresse der Z2M-Oberfläche eines Gateways: eigene Eingabe, frontend.url aus Z2M, Link am Bridge-Gerät in HA oder das einzige Z2M-Add-on. */
+function z2mUiOf(bridgeId) {
+  const own = S.gateways[bridgeId]?.ui;
+  if (own) return {url: own, how: "eigene Adresse"};
+  const fe = z2mInfoOf(bridgeId)?.frontend?.url;
+  if (fe) return {url: fe, how: "frontend.url aus Zigbee2MQTT"};
+  const cu = S.bridges.find(x => x.id === bridgeId)?.config_url;
+  if (cu) return {url: cu.split("#")[0], how: "Link am Bridge-Gerät in HA"};
+  if (S.z2mUis.length === 1 && S.bridges.filter(b => b.source === "z2m").length === 1) return {url: S.z2mUis[0].url, how: "Add-on „" + S.z2mUis[0].name + "“"};
+  return null;
+}
+/** Link zur Info-Seite des Geräts in der Zigbee2MQTT-Oberfläche ("" wenn unbekannt). */
+function z2mLink(d) {
+  if (d.source !== "z2m" || !d.ieee) return "";
+  if (d.config_url) return d.config_url; // setzt Z2M selbst, wenn dort frontend.url eingetragen ist
+  const ui = z2mUiOf(d.bridge), info = z2mInfoOf(d.bridge);
+  if (!ui) return "";
+  // windfront (Standard in Z2M 2.x) zählt Instanzen mit: #/device/0/<ieee>; die alte Oberfläche nicht. Unbekannt: windfront
+  const legacy = info && (info.frontend?.package || "zigbee2mqtt-frontend") === "zigbee2mqtt-frontend";
+  return ui.url.split("#")[0].replace(/\/+$/, "") + "/#/device/" + (legacy ? "" : "0/") + d.ieee + "/info";
+}
+const haDevicePath = d => "/config/devices/device/" + encodeURIComponent(d.id);
+/** Wechselt in Home Assistant zur Seite path – das Add-on läuft im iframe von HA. Strg-/Mittelklick öffnet wie gewohnt einen neuen Tab. */
+function haNavigate(e, path) {
+  if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;
+  e.preventDefault();
+  if (api.demo) { toast("Demo: öffnet in Home Assistant " + path); return; }
+  if (window.parent === window) { location.assign(path); return; }
+  window.parent.postMessage({type: "home-assistant/navigate", path}, "*");
+  // Ältere HA-Versionen kennen die Nachricht nicht – dann die ganze Seite wechseln
+  setTimeout(() => { try { if (window.top.location.pathname !== path) window.top.location.assign(path); } catch (err) { window.open(path, "_top"); } }, 700);
+}
+function openZ2m(e, url) {
+  if (url.startsWith("homeassistant://")) return haNavigate(e, "/" + url.slice("homeassistant://".length).replace(/^\/+/, ""));
+  if (api.demo) { e.preventDefault(); toast("Demo: öffnet die Zigbee2MQTT-Seite " + url); }
+}
+/** Knöpfe „ⓘ Z2M“ (Geräteseite in der Zigbee2MQTT-Oberfläche) und „⌂ HA“ (Geräteseite in Home Assistant). */
+function openLinks(d) {
+  if (d.planned) return "";
+  let out = "";
+  if (d.source === "z2m") {
+    const url = z2mLink(d);
+    out += url ? `<a class="lnk z2m" href="${esc(url)}" target="_blank" rel="noopener" title="Gerät in Zigbee2MQTT öffnen: Info, MQTT-Topic, Exposes, Einstellungen">ⓘ Z2M</a>`
+      : `<span class="lnk off" title="Adresse der Zigbee2MQTT-Oberfläche unbekannt – im Tab „Gateways“ bei „Z2M-Oberfläche“ eintragen (Klick öffnet den Tab)">ⓘ Z2M</span>`;
+  }
+  return out + `<a class="lnk ha" href="${esc(haDevicePath(d))}" target="_top" title="Gerät in Home Assistant öffnen: Entitäten, Bereich, MQTT-Info">⌂ HA</a>`;
+}
+const showTab = name => document.querySelector(`nav button[data-tab="${name}"]`).click();
 
 /** Baut aus dem Namensmuster einen regulären Ausdruck mit den vorhandenen Kürzeln. */
 function patternRegex(sc) {
@@ -500,7 +594,7 @@ function renderDevices() {
     </div>
     <div class="card"><table>
       <thead><tr><th><input type="checkbox" id="selAll" ${rows.length && rows.every(d => S.sel.has(d.id)) ? "checked" : ""}></th>
-        <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Gateway</th>" : ""}<th>Haus</th><th>Etage</th><th>Raum</th><th>Typ</th><th class="hide-s hide-l">Gerät</th><th class="hide-s hide-m">IEEE</th><th>Status</th><th></th></tr></thead>
+        <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Gateway</th>" : ""}<th>Haus</th><th>Etage</th><th>Raum</th><th>Typ</th><th class="hide-s hide-l">Gerät</th><th class="hide-s hide-m">IEEE</th><th>Status</th><th>Öffnen</th><th></th></tr></thead>
       <tbody>${rows.map(d => {
         const s = sug.get(d.id), r = roomOf(d), t = typeOf(d);
         const nameCell = S.editing === d.id
@@ -518,9 +612,10 @@ function renderDevices() {
           <td class="hide-s hide-l">${esc(d.manufacturer)}<div class="sub">${esc(d.model || d.orig_name)}</div></td>
           <td class="hide-s hide-m"><code>${esc(d.ieee || "–")}</code></td>
           <td><span class="badge ${d.planned ? "plan" : d.is_new ? "new" : "ok"}">${d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}</span></td>
+          <td><div class="links">${openLinks(d)}</div></td>
           <td>${s && s !== d.name ? `<button class="btn apply">Übernehmen</button>` : ""}${d.planned ? `<button class="x delP" title="Entfernen">✕</button>` : ""}</td>
         </tr>`;
-      }).join("") || `<tr><td colspan="12" class="empty">Keine Geräte gefunden.</td></tr>`}</tbody>
+      }).join("") || `<tr><td colspan="13" class="empty">Keine Geräte gefunden.</td></tr>`}</tbody>
     </table></div>`;
 
   const root = $("#tab-devices");
@@ -564,6 +659,9 @@ function renderDevices() {
     $(".room", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], room: e.target.value}; persist(); renderDevices(); };
     $(".type", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], type: e.target.value}; persist(); renderDevices(); };
     $(".setArea", tr) && ($(".setArea", tr).onclick = () => assignAreas([d]));
+    $(".lnk.ha", tr) && ($(".lnk.ha", tr).onclick = e => haNavigate(e, haDevicePath(d)));
+    $(".lnk.z2m", tr) && ($(".lnk.z2m", tr).onclick = e => openZ2m(e, z2mLink(d)));
+    $(".lnk.off", tr) && ($(".lnk.off", tr).onclick = () => showTab("gateways"));
     $(".apply", tr) && ($(".apply", tr).onclick = async () => { if (await applyBatch([[d, sug.get(d.id)]])) toast("Name übernommen"); renderDevices(); });
     $(".delP", tr) && ($(".delP", tr).onclick = () => { S.planned = S.planned.filter(p => p.id !== d.id); persist(); renderDevices(); });
     $(".name", tr).onclick = () => { if (S.editing !== d.id) { S.editing = d.id; renderDevices(); const i = $("#edit"); i.focus(); i.select(); } };
@@ -742,22 +840,29 @@ function renderGateways() {
   $("#tab-gateways").innerHTML = `<div class="panel" style="margin-bottom:16px"><h2>Gateways</h2>
     <p class="sub" id="basesHint">${S.z2mBases.length ? "Gefundene Zigbee2MQTT-Basis-Topics: <code>" + S.z2mBases.map(b => esc(b.base_topic)).join("</code>, <code>") + "</code>" : ""} <button class="btn" id="detect">Basis-Topics erkennen</button></p>
     <p class="sub">Je Gateway (Zigbee2MQTT-Instanz oder ZHA) kannst du einen Namen, den MQTT-Basis-Topic und ein Haus festlegen. Das Haus gilt für alle Geräte dieses Gateways, solange du beim Gerät nichts anderes wählst. „Anlernen“ öffnet das Netz für neue Geräte.</p>
-    <div class="card"><table><thead><tr><th>Gateway</th><th>Bezeichnung</th><th>Basis-Topic</th><th>Haus</th><th>Geräte</th><th>Anlernen</th></tr></thead><tbody>
-    ${S.bridges.map(b => { const g = S.gateways[b.id] || {};
+    <p class="sub">„Z2M-Oberfläche“ ist das Ziel des Knopfs „ⓘ Z2M“ in der Geräteliste. Das Add-on findet sie selbst (Zigbee2MQTT-Add-on, <code>frontend.url</code> aus Z2M); bei mehreren Instanzen hier das passende Add-on auswählen oder eine Adresse wie <code>http://192.168.1.10:8080</code> eintragen.</p>
+    <datalist id="z2mUiList">${S.z2mUis.map(u => `<option value="${esc(u.url)}">${esc(u.name)}${u.state && u.state !== "started" ? " (gestoppt)" : ""}</option>`).join("")}</datalist>
+    <div class="card"><table><thead><tr><th>Gateway</th><th>Bezeichnung</th><th>Basis-Topic</th><th>Z2M-Oberfläche</th><th>Haus</th><th>Geräte</th><th>Anlernen</th></tr></thead><tbody>
+    ${S.bridges.map(b => { const g = S.gateways[b.id] || {}, ui = b.source === "z2m" ? z2mUiOf(b.id) : null, addon = ui && S.z2mUis.find(u => u.url === ui.url);
       return `<tr data-b="${esc(b.id)}"><td>${esc(b.name)}<div class="sub">${b.source === "zha" ? "ZHA" : "Zigbee2MQTT"}</div></td>
         <td><input class="gl" value="${esc(g.label || "")}" placeholder="${esc(b.name)}"></td>
         <td>${b.source === "z2m" ? `<input class="gt" value="${esc(g.topic || "")}" placeholder="zigbee2mqtt" style="width:150px">` : "–"}</td>
+        <td>${b.source === "z2m" ? `<input class="gu" list="z2mUiList" value="${esc(g.ui || "")}" placeholder="${esc(ui?.url || "Add-on wählen oder http://…:8080")}" style="width:200px">
+          <div class="sub">${ui ? `${g.ui ? (addon ? "Add-on „" + esc(addon.name) + "“" : "eigene Adresse") : "automatisch: " + esc(ui.how)} · <a class="uiOpen" href="${esc(ui.url)}" target="_blank" rel="noopener">öffnen ↗</a>`
+            : S.z2mUis.length ? "bitte Add-on auswählen" : "nicht gefunden"}</div>` : "–"}</td>
         <td><select class="gh">${houseOpts(g.house)}</select></td>
         <td>${S.devices.filter(d => d.bridge === b.id).length}</td>
         <td><span class="badge" data-cd="${esc(b.id)}"></span> <button class="btn pj" data-t="240">4 Min anlernen</button> <button class="btn pj" data-t="0">Stopp</button></td></tr>`; }).join("") || `<tr><td colspan="6" class="empty">Keine Gateways gefunden.</td></tr>`}
     </tbody></table></div></div>`;
   const root = $("#tab-gateways");
-  $("#detect", root).onclick = async () => { const n = await detectBases(); toast(n ? n + " Basis-Topic(s) erkannt" : (S.z2mBases.length ? "Keine neuen Zuordnungen (Topics siehe oben, im Feld eintragen)" : "Keine Zigbee2MQTT-Instanz über MQTT gefunden")); renderGateways(); };
+  $("#detect", root).onclick = async () => { S.z2mUis = await api.z2mUis().catch(() => S.z2mUis); const n = await detectBases(); toast(n ? n + " Basis-Topic(s) erkannt" : (S.z2mBases.length ? "Keine neuen Zuordnungen (Topics siehe oben, im Feld eintragen)" : "Keine Zigbee2MQTT-Instanz über MQTT gefunden")); renderGateways(); };
   root.querySelectorAll("tr[data-b]").forEach(tr => {
     const id = tr.dataset.b, b = S.bridges.find(x => x.id === id);
     const set = (k, v) => { S.gateways[id] = {...S.gateways[id], [k]: v}; persist(); };
     $(".gl", tr).onchange = e => set("label", e.target.value.trim());
     $(".gt", tr) && ($(".gt", tr).onchange = e => set("topic", e.target.value.trim()));
+    $(".gu", tr) && ($(".gu", tr).onchange = e => { set("ui", e.target.value.trim()); renderGateways(); });
+    $(".uiOpen", tr) && ($(".uiOpen", tr).onclick = e => openZ2m(e, e.currentTarget.getAttribute("href")));
     $(".gh", tr).onchange = e => { set("house", e.target.value); renderGateways(); };
     tr.querySelectorAll(".pj").forEach(btn => btn.onclick = async () => {
       const t = +btn.dataset.t;
@@ -852,12 +957,16 @@ function renderExport() {
     <div class="panel"><h2>Namensschema</h2><p class="sub">Schema (Muster, Räume, Typen) sichern oder auf einer anderen Instanz laden.</p>
       <button class="btn" id="sExp">Schema exportieren</button> <button class="btn" id="sImp">Schema importieren…</button>
       <input type="file" id="sFile" accept="application/json" hidden></div>
+    <div class="panel" style="grid-column:1/-1"><h2>Sicherungen</h2>
+      <p class="sub">Namensschema, Zuordnungen (Haus, Etage, Raum, Typ), geplante Geräte, Gateways und die Geräteliste aus Home Assistant werden automatisch gesichert:
+        nach Änderungen höchstens stündlich, einmal am Tag, vor jedem Umbenennen und vor jeder Wiederherstellung. Ein unveränderter Stand wird nicht doppelt gesichert.
+        Fehlen die Einstellungen beim Start (z. B. nach einer Neuinstallation), holt das Add-on den letzten Stand von selbst zurück.</p>
+      <div class="row"><button class="btn primary" id="bkNow">Jetzt sichern</button> <button class="btn" id="bkUp">Sicherung aus Datei laden…</button>
+        <input type="file" id="bkFile" accept="application/json" hidden></div>
+      <div id="bkBox"><p class="sub">Lade Sicherungen …</p></div></div>
   </div>`;
   const rows = () => allRows().map(d => ({name: d.name, ieee: d.ieee, hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area, haus: houseOf(d)?.name || "", etage: floorOf(d)?.name || "", raum: roomOf(d)?.name || "", typ: typeOf(d)?.name || "", status: d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}));
-  $("#csv").onclick = () => {
-    const r = rows(), h = Object.keys(r[0] || {name: ""});
-    download("zigbee-geraete.csv", [h, ...r.map(o => h.map(k => o[k]))].map(l => l.map(v => `"${String(v).replaceAll('"', '""')}"`).join(";")).join("\n"), "text/csv");
-  };
+  $("#csv").onclick = () => download("zigbee-geraete.csv", toCsv(rows()), "text/csv");
   $("#json").onclick = () => download("zigbee-geraete.json", JSON.stringify(rows(), null, 2), "application/json");
   $("#sExp").onclick = () => download("namensschema.json", JSON.stringify(S.scheme, null, 2), "application/json");
   $("#sImp").onclick = () => $("#sFile").click();
@@ -868,6 +977,55 @@ function renderExport() {
       S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, floors: clone(DEFAULT_SCHEME.floors), ...s}; persist(); toast("Schema importiert");
     } catch (err) { toast("Import fehlgeschlagen: " + err.message); }
   };
+  $("#bkNow").onclick = async () => {
+    try { await api.createBackup(); toast("Sicherung angelegt"); } catch (err) { toast("Sichern fehlgeschlagen: " + err.message); }
+    renderBackups();
+  };
+  $("#bkUp").onclick = () => $("#bkFile").click();
+  $("#bkFile").onchange = async e => {
+    const f = e.target.files[0]; e.target.value = "";
+    try { await restoreBackup({backup: JSON.parse(await f.text())}, "aus der Datei „" + f.name + "“"); } catch (err) { toast("Datei nicht lesbar: " + err.message); }
+  };
+  renderBackups();
+}
+
+const toCsv = rows => { const h = Object.keys(rows[0] || {name: ""}); return [h, ...rows.map(o => h.map(k => o[k] ?? ""))].map(l => l.map(v => `"${String(v).replaceAll('"', '""')}"`).join(";")).join("\n"); };
+const fmtDate = iso => { const d = new Date(iso); return isNaN(d) ? iso || "" : d.toLocaleString("de-DE", {dateStyle: "medium", timeStyle: "short"}); };
+const BACKUP_REASONS = {auto: "nach Änderungen", taeglich: "täglich", manuell: "von Hand", "vor-umbenennen": "vor dem Umbenennen", "vor-raum": "vor dem Raum-Zuweisen", "vor-wiederherstellen": "vor einer Wiederherstellung"};
+
+/** Liste der Sicherungen im Export-Tab. */
+async function renderBackups() {
+  const box = $("#bkBox"); if (!box) return;
+  let data;
+  try { data = await api.backups(); } catch (e) { box.innerHTML = `<p class="sub">Sicherungen nicht lesbar: ${esc(e.message)}</p>`; return; }
+  box.innerHTML = `<p class="sub">Ablage: <code>${esc(data.dir)}</code>${data.persistent ? " – liegt im Home-Assistant-Konfigurationsordner: bleibt bei einer Neuinstallation des Add-ons erhalten und ist in jedem HA-Backup enthalten." : ""}
+      Die letzten ${data.keep} Sicherungen werden behalten.</p>
+    <div class="card"><table><thead><tr><th>Zeitpunkt</th><th>Anlass</th><th>Geräte</th><th>Zuordnungen</th><th></th></tr></thead><tbody>
+    ${data.items.map(b => `<tr data-file="${esc(b.file)}"><td>${esc(fmtDate(b.created))}</td><td>${esc(BACKUP_REASONS[b.reason] || b.reason)}</td><td>${b.devices}</td><td>${b.assigned}</td>
+      <td style="white-space:nowrap;text-align:right"><button class="btn bkRestore" title="Schema, Zuordnungen, geplante Geräte und Gateways aus dieser Sicherung zurückholen">Wiederherstellen</button>
+        <button class="btn bkJson" title="Sicherung als Datei herunterladen">JSON</button> <button class="btn bkCsv" title="Geräteliste dieser Sicherung als Tabelle">CSV</button></td></tr>`).join("")
+      || `<tr><td colspan="5" class="empty">Noch keine Sicherung – die erste entsteht beim nächsten Speichern oder mit „Jetzt sichern“.</td></tr>`}
+    </tbody></table></div>`;
+  box.querySelectorAll("tr[data-file]").forEach(tr => {
+    const file = tr.dataset.file, when = fmtDate(data.items.find(b => b.file === file)?.created);
+    const load = async () => { try { return await api.backup(file); } catch (e) { toast("Sicherung nicht lesbar: " + e.message); } };
+    $(".bkRestore", tr).onclick = () => restoreBackup({file}, "vom " + when);
+    $(".bkJson", tr).onclick = async () => { const b = await load(); if (b) download(file, JSON.stringify(b, null, 2), "application/json"); };
+    $(".bkCsv", tr).onclick = async () => { const b = await load(); if (b) download(file.replace(/\.json$/, ".csv"), toCsv(backupRows(b)), "text/csv"); };
+  });
+}
+/** Geräteliste einer Sicherung mit den damaligen Zuordnungen. */
+function backupRows(b) {
+  const sc = b.store?.scheme || {}, meta = b.store?.meta || {}, nm = (list, id) => (list || []).find(x => x.id === id)?.name || "";
+  return (b.devices || []).map(d => ({name: d.name, ieee: d.ieee, quelle: d.source === "zha" ? "ZHA" : "Zigbee2MQTT", hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area,
+    haus: nm(sc.houses, meta[d.id]?.house), etage: nm(sc.floors, meta[d.id]?.floor), raum: nm(sc.rooms, meta[d.id]?.room), typ: nm(sc.types, meta[d.id]?.type)}));
+}
+async function restoreBackup(payload, label) {
+  if (!confirm(`Einstellungen aus der Sicherung ${label} zurückholen?\n\nNamensschema, Zuordnungen (Haus, Etage, Raum, Typ), geplante Geräte und Gateways werden ersetzt. `
+    + `Der aktuelle Stand wird vorher selbst gesichert. Die Gerätenamen in Home Assistant und Zigbee2MQTT bleiben unverändert.`)) return;
+  clearTimeout(persist.t); S.storeLoaded = false; // ein noch ausstehendes Speichern darf die Wiederherstellung nicht überschreiben
+  try { await api.restoreBackup(payload); toast("Wiederhergestellt – lade neu …"); setTimeout(() => location.reload(), 700); }
+  catch (e) { S.storeLoaded = true; toast("Wiederherstellen fehlgeschlagen: " + e.message); }
 }
 
 // ---------- Start ----------
@@ -886,13 +1044,20 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   if (st.scheme?.pattern) S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, floors: clone(DEFAULT_SCHEME.floors), ...st.scheme};
   S.meta = st.meta || {}; S.planned = st.planned || [];
   for (const k of OPTION_KEYS) if (typeof st.options?.[k] === "boolean") S[k] = st.options[k];
+  S.storeLoaded = !api.error;
   if (api.error) $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--new)"><b>Verbindung zu Home Assistant fehlgeschlagen.</b> Das Add-on läuft, kann aber keine Geräte laden – keine Demo-Daten.<br><code>${esc(api.error)}</code><br><button class="btn" style="margin-top:8px" onclick="location.reload()">Erneut versuchen</button> <a href="api/diag" target="_blank">Diagnose öffnen</a> <span class="sub">(Details auch im Add-on-Log)</span></div>`;
+  else if (data.restored) $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--ok)"><b>Einstellungen wiederhergestellt.</b> Es waren keine gespeicherten Einstellungen vorhanden (z. B. nach einer Neuinstallation) – das Add-on hat den Stand vom ${esc(fmtDate(data.restored.created))} zurückgeholt (${esc(data.restored.source)}). Ältere Stände: Tab „Export“ → Sicherungen.</div>`;
   else if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee-Geräte geladen und umbenannt.</div>`;
   S.scheme.floors = S.scheme.floors || clone(DEFAULT_SCHEME.floors); S.scheme.defaultFloor = S.scheme.defaultFloor || "";
   syncFloors(); syncAreas();
   syncFromNames(false); // Geräte ohne eigene Auswahl: Zuordnung aus dem vorhandenen Namen
   renderDevices();
-  detectBases().then(n => { if (n) { toast(n + " Z2M-Basis-Topic(s) erkannt"); } });
+  // Basis-Topics und Z2M-Oberflächen kommen nach: danach die Knöpfe „ⓘ Z2M“ neu zeichnen (nicht mitten in einer Eingabe)
+  Promise.all([detectBases(), api.z2mUis().then(u => { S.z2mUis = Array.isArray(u) ? u : []; }).catch(() => {})]).then(([n]) => {
+    if (n) toast(n + " Z2M-Basis-Topic(s) erkannt");
+    const a = document.activeElement, tab = document.querySelector("main section:not([hidden])");
+    if (!S.editing && (!a || a === document.body || !tab?.contains(a))) ({"tab-devices": renderDevices, "tab-gateways": renderGateways})[tab?.id]?.();
+  });
 })();
 </script>
 </body>
