@@ -37,6 +37,8 @@ German version: [README.md](README.md)
 - Planned devices reserve names/numbers
 - Rename entity IDs along with the device (default: on, can be unticked)
 - CSV/JSON export, scheme export/import
+- **Jump straight to a device:** in the device list, "ⓘ Z2M" opens the device's info page in the Zigbee2MQTT UI (MQTT topic, exposes, settings) and "⌂ HA" opens the device page in Home Assistant (entities, area, MQTT info). The add-on finds the Z2M UI itself (Zigbee2MQTT add-on via ingress, or `frontend.url` from Z2M); with several instances pick it in the "Gateways" tab under "Z2M-Oberfläche" or enter an address such as `http://192.168.1.10:8080`.
+- **Automatic backups:** naming scheme, assignments, planned devices, gateways and the device list from HA are backed up – after changes at most hourly, daily, before every rename/area assignment and before every restore (unchanged states are not duplicated, the last 60 are kept). Location: `/config/zigbee_devices_manager/backups` – survives reinstalling the add-on and is part of every HA backup. If the settings are missing at start, the add-on restores the latest state by itself. "Export" tab: list of backups, "Jetzt sichern" (back up now), restore, download as JSON or the device list as CSV, restore from a file.
 
 ## Installation
 
@@ -62,5 +64,6 @@ a browser. Rebuild with `python3 scripts/build_demo.py` (also available as a Git
   after YAML changes and restart Node-RED afterwards. The add-on mounts `/config` and `/addon_configs` for this.
   `.storage`, `custom_components` and `secrets.yaml` are never touched.
 - Pairing new devices still happens in ZHA/Z2M; they show up here as "new" automatically.
-- Scheme and assignments are stored in the add-on's `/data/store.json`.
+- Scheme and assignments are stored in the add-on's `/data/store.json`; a copy and the backups live in `/config/zigbee_devices_manager/`. To start from scratch on purpose, delete that folder too before reinstalling.
+- The add-on reads the installed Zigbee2MQTT add-ons via the Supervisor API (`hassio_api`, read-only) to link their UI.
 - Changes per version: [`zigbee_devices_manager/CHANGELOG.md`](zigbee_devices_manager/CHANGELOG.md) (German) – Home Assistant shows it in the update dialog. Every new version needs a `## <version>` section there.

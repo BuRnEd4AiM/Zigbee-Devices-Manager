@@ -1,5 +1,6 @@
 """Backend des Zigbee Devices Manager (Home Assistant Add-on, Ingress)."""
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -7,6 +8,7 @@ import re
 import time
 import uuid
 import unicodedata
+from datetime import datetime
 from pathlib import Path
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
@@ -37,6 +39,11 @@ SKIP_DIRS = {".storage", ".git", ".cloud", "custom_components", "deps", "__pycac
 UI_MANAGED_YAML = {"automations.yaml", "scripts.yaml", "scenes.yaml"}
 MAX_FILE_BYTES = 5_000_000
 CORE_API = os.environ.get("HA_API_URL", "http://supervisor/core/api")
+SUPERVISOR_API = os.environ.get("SUPERVISOR_API", "http://supervisor")
+BACKUP_KEEP = 60          # so viele Sicherungen bleiben erhalten
+BACKUP_EVERY = 3600       # nach dem Speichern höchstens stündlich automatisch sichern
+BACKUP_DAILY = 86400
+BACKUP_NAME_RE = re.compile(r"^sicherung-[0-9_-]+-[a-z-]+(-\d+)?\.json$")
 
 
 TOPIC_RE = re.compile(r"^[A-Za-z0-9_\-]+(/[A-Za-z0-9_\-]+)*$")
@@ -103,21 +110,23 @@ def load_store():
         return {}
 
 
-async def get_state(request):
-    devices, areas = await ha([
-        {"type": "config/device_registry/list"},
-        {"type": "config/area_registry/list"},
-    ])
+def write_json(path, data):
+    """Schreibt erst in eine Hilfsdatei und tauscht dann aus – ein Absturz mitten im Schreiben hinterlässt keine halbe Datei."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    os.replace(tmp, path)
+
+
+def collect_devices(devices, areas):
+    """Zigbee-Geräte (ZHA und Zigbee2MQTT) und ihre Gateways aus der Geräte-Registry."""
     area_names = {a["area_id"]: a["name"] for a in areas}
-    ok, floors = await ha_try({"type": "config/floor_registry/list"})  # ältere HA-Versionen kennen keine Etagen
-    if not ok:
-        floors = []
     out, bridges = [], {}
     for d in devices:
         if any(dom == "mqtt" and ident.startswith("zigbee2mqtt_bridge_") for dom, ident in d.get("identifiers", [])):
             ident = next(i for dom, i in d["identifiers"] if dom == "mqtt" and i.startswith("zigbee2mqtt_bridge_"))
             bridges[d["id"]] = {"id": d["id"], "source": "z2m", "name": d.get("name_by_user") or d.get("name") or "Zigbee2MQTT",
-                                "ieee": ident.removeprefix("zigbee2mqtt_bridge_")}
+                                "ieee": ident.removeprefix("zigbee2mqtt_bridge_"), "config_url": d.get("configuration_url") or ""}
             continue
         found = zigbee_source(d)
         if not found:
@@ -139,9 +148,25 @@ async def get_state(request):
             "source": source,
             "area": area_names.get(d.get("area_id"), ""),
             "area_id": d.get("area_id") or "",
+            # Link zur Geräteseite in der Z2M-Oberfläche – setzt Zigbee2MQTT selbst, wenn dort frontend.url eingetragen ist
+            "config_url": d.get("configuration_url") or "",
         })
+    return out, bridges
+
+
+async def get_state(request):
+    devices, areas = await ha([
+        {"type": "config/device_registry/list"},
+        {"type": "config/area_registry/list"},
+    ])
+    ok, floors = await ha_try({"type": "config/floor_registry/list"})  # ältere HA-Versionen kennen keine Etagen
+    if not ok:
+        floors = []
+    out, bridges = collect_devices(devices, areas)
     used = {d["bridge"] for d in out}
-    return web.json_response({"devices": out, "store": load_store(),
+    restored = dict(RESTORED)
+    RESTORED.clear()  # Hinweis nur einmal zeigen
+    return web.json_response({"devices": out, "store": load_store(), "restored": restored or None,
                               "areas": [{"id": a["area_id"], "name": a["name"], "floor_id": a.get("floor_id") or ""} for a in areas],
                               "floors": [{"id": f["floor_id"], "name": f["name"], "level": f.get("level")} for f in floors],
                               "bridges": [b for b in bridges.values() if b["id"] in used or b["source"] == "z2m"]})
@@ -231,9 +256,38 @@ async def z2m_bases(request):
         if base in seen or not isinstance(info, dict):
             continue
         seen.add(base)
+        frontend = (info.get("config") or {}).get("frontend") or {}
         found.append({"base_topic": base, "ieee": (info.get("coordinator") or {}).get("ieee_address", ""),
-                      "version": info.get("version", "")})
+                      "version": info.get("version", ""),
+                      # Oberfläche: Paket bestimmt das Link-Format (#/device/0/<ieee> bei windfront), url ist frontend.url
+                      "frontend": {"package": frontend.get("package", ""), "url": frontend.get("url", "")}})
     return web.json_response(found)
+
+
+async def supervisor_get(http, path):
+    async with http.get(f"{SUPERVISOR_API}{path}") as r:
+        if r.status != 200:
+            raise web.HTTPBadGateway(text=f"Supervisor {path}: HTTP {r.status}")
+        return (await r.json()).get("data") or {}
+
+
+async def z2m_uis(request):
+    """Installierte Zigbee2MQTT-Add-ons mit Oberfläche (Ingress) – Ziel für den Knopf „Gerät in Z2M öffnen“."""
+    out = []
+    if not TOKEN:
+        return web.json_response(out)
+    try:
+        async with ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}, timeout=ClientTimeout(total=10)) as http:
+            for app in (await supervisor_get(http, "/supervisor/info")).get("addons") or []:
+                if "zigbee2mqtt" not in f"{app.get('slug', '')} {app.get('name', '')}".lower().replace(" ", ""):
+                    continue
+                info = await supervisor_get(http, f"/addons/{app['slug']}/info")
+                if info.get("ingress") and info.get("ingress_url"):
+                    out.append({"slug": app["slug"], "name": info.get("name") or app.get("name") or app["slug"],
+                                "url": info["ingress_url"], "state": info.get("state", "")})
+    except (ClientError, asyncio.TimeoutError, ValueError, KeyError, web.HTTPException) as err:
+        log.warning("Zigbee2MQTT-Add-ons nicht lesbar: %r", err)
+    return web.json_response(out)
 
 
 async def z2m_request(base, action, payload, timeout=12):
@@ -328,9 +382,211 @@ async def permit_state(request):
 
 
 async def put_store(request):
-    DATA.mkdir(parents=True, exist_ok=True)
-    STORE_FILE.write_text(json.dumps(await request.json(), indent=2, ensure_ascii=False))
+    save_store(await request.json())
+    # höchstens stündlich sichern; ein unveränderter Stand wird übersprungen und erst nach 5 Minuten erneut verglichen
+    if time.time() - newest_backup_time() >= BACKUP_EVERY and time.time() - LAST_AUTO[0] >= 300:
+        LAST_AUTO[0] = time.time()
+        background(safe_backup("auto"))
     return web.json_response({"ok": True})
+
+
+# ---------- Sicherungen ----------
+RESTORED = {}       # wurde beim Start aus einer Sicherung wiederhergestellt: Hinweis für die Oberfläche
+LAST_AUTO = [0.0]
+BACKUP_LOCK = asyncio.Lock()
+TASKS = set()
+
+
+def background(coro):
+    task = asyncio.create_task(coro)
+    TASKS.add(task)
+    task.add_done_callback(TASKS.discard)
+
+
+def backup_root():
+    """Im HA-Konfigurationsordner überstehen die Sicherungen eine Neuinstallation des Add-ons und sind in jedem HA-Backup;
+    ohne eingebundenen Ordner bleiben sie unter /data."""
+    root = HA_CONFIG_DIR / "zigbee_devices_manager"
+    if HA_CONFIG_DIR.is_dir():  # nicht eingebunden: sonst landete alles im flüchtigen Container-Dateisystem
+        try:
+            (root / "backups").mkdir(parents=True, exist_ok=True)
+            return root
+        except OSError:
+            pass
+    return DATA / "sicherung"
+
+
+def backup_files():
+    folder = backup_root() / "backups"
+    if not folder.is_dir():
+        return []
+    # neueste zuerst; der Zeitstempel im Namen hat nur Sekunden
+    return sorted((p for p in folder.glob("sicherung-*.json") if BACKUP_NAME_RE.match(p.name)), key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
+
+
+def newest_backup_time():
+    files = backup_files()
+    return files[0].stat().st_mtime if files else 0
+
+
+def read_backup(name):
+    if not BACKUP_NAME_RE.match(name or ""):
+        raise web.HTTPBadRequest(text="Ungültiger Dateiname")
+    try:
+        return json.loads((backup_root() / "backups" / name).read_text())
+    except (OSError, ValueError) as err:
+        raise web.HTTPNotFound(text=f"Sicherung {name} nicht lesbar: {err}")
+
+
+def save_store(store):
+    """Speichert die Einstellungen und legt eine Kopie neben die Sicherungen (für die Wiederherstellung nach Neuinstallation)."""
+    write_json(STORE_FILE, store)
+    try:
+        write_json(backup_root() / "store.json", store)
+    except OSError as err:
+        log.warning("Kopie der Einstellungen nicht schreibbar: %r", err)
+
+
+def valid_store(data):
+    return isinstance(data, dict) and isinstance(data.get("scheme"), dict) and bool(data["scheme"].get("pattern"))
+
+
+async def snapshot_devices():
+    devices, areas = await ha([{"type": "config/device_registry/list"}, {"type": "config/area_registry/list"}])
+    out, _ = collect_devices(devices, areas)
+    keys = ("id", "ieee", "source", "name", "area", "manufacturer", "model")
+    return [{k: d[k] for k in keys} for d in out]
+
+
+async def make_backup(reason, force=False):
+    """Sichert Einstellungen (Schema, Zuordnungen, Gateways …) und die Geräteliste aus HA. Unveränderter Stand wird nicht doppelt gesichert."""
+    async with BACKUP_LOCK:
+        store = load_store()
+        if not valid_store(store):
+            return None
+        try:
+            devices = await snapshot_devices()
+        except web.HTTPException as err:
+            log.warning("Sicherung ohne Geräteliste (HA nicht erreichbar): %s", err.text)
+            devices = None
+        digest = hashlib.sha256(json.dumps({"store": store, "devices": devices}, sort_keys=True).encode()).hexdigest()
+        files = backup_files()
+        if not force and files:
+            try:
+                last = json.loads(files[0].read_text())
+                if last.get("hash") == digest or (devices is None and last.get("store") == store):
+                    return None
+            except (OSError, ValueError):
+                pass
+        now = datetime.now().astimezone()
+        folder = backup_root() / "backups"
+        path, n = folder / f"sicherung-{now:%Y-%m-%d_%H%M%S}-{reason}.json", 1
+        while path.exists():
+            n += 1
+            path = folder / f"sicherung-{now:%Y-%m-%d_%H%M%S}-{reason}-{n}.json"
+        write_json(path, {"format": "zigbee-devices-manager-backup", "version": 1, "created": now.isoformat(timespec="seconds"),
+                          "reason": reason, "hash": digest, "store": store, "devices": devices or []})
+        for old in backup_files()[BACKUP_KEEP:]:
+            old.unlink(missing_ok=True)
+        log.info("Sicherung angelegt: %s", path)
+        return path.name
+
+
+async def safe_backup(reason):
+    """Sicherung vor einer Änderung – ein Fehler hier darf das Umbenennen nicht verhindern."""
+    try:
+        await make_backup(reason)
+    except Exception:  # noqa: BLE001
+        log.exception("Sicherung „%s“ fehlgeschlagen", reason)
+
+
+def backup_entry(path):
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    store = data.get("store") or {}
+    return {"file": path.name, "created": data.get("created", ""), "reason": data.get("reason", ""),
+            "devices": len(data.get("devices") or []), "assigned": len(store.get("meta") or {}),
+            "rooms": len((store.get("scheme") or {}).get("rooms") or []), "pattern": (store.get("scheme") or {}).get("pattern", "")}
+
+
+async def list_backups(request):
+    root = backup_root()
+    persistent = root.parent == HA_CONFIG_DIR
+    # so heißt der Ordner im File editor / in der Samba-Freigabe von HA
+    return web.json_response({"dir": "/config/zigbee_devices_manager/backups" if persistent else str(root / "backups"), "persistent": persistent,
+                              "keep": BACKUP_KEEP, "items": [e for p in backup_files() if (e := backup_entry(p))]})
+
+
+async def create_backup(request):
+    name = await make_backup("manuell", force=True)
+    if not name:
+        raise web.HTTPConflict(text="Noch nichts zu sichern – es sind keine Einstellungen gespeichert")
+    return web.json_response({"ok": True, "file": name})
+
+
+async def get_backup(request):
+    data = read_backup(request.match_info["name"])
+    return web.json_response(data, headers={"Content-Disposition": f'attachment; filename="{request.match_info["name"]}"'})
+
+
+async def restore_backup(request):
+    """Spielt eine Sicherung (aus dem Ordner oder hochgeladen) zurück. Der aktuelle Stand wird vorher selbst gesichert.
+    Namen in HA/Z2M bleiben unverändert – zurück kommen Schema, Zuordnungen, geplante Geräte, Gateways und Haken."""
+    body = await request.json()
+    data = read_backup(body["file"]) if body.get("file") else body.get("backup")
+    store = data.get("store") if isinstance(data, dict) and "store" in data else data
+    if not valid_store(store):
+        raise web.HTTPBadRequest(text="Keine gültige Sicherung (Namensschema fehlt)")
+    await make_backup("vor-wiederherstellen")
+    save_store(store)
+    return web.json_response({"ok": True})
+
+
+def restore_on_start():
+    """Fehlt /data/store.json (z. B. nach Neuinstallation) oder ist sie kaputt, kommt der letzte gesicherte Stand zurück."""
+    if STORE_FILE.exists():
+        try:
+            json.loads(STORE_FILE.read_text())
+            return
+        except OSError:
+            return
+        except ValueError:
+            broken = STORE_FILE.with_name(f"store.json.defekt-{time.strftime('%Y%m%d-%H%M%S')}")
+            os.replace(STORE_FILE, broken)
+            log.warning("store.json war unlesbar, beiseitegelegt als %s", broken)
+    root = backup_root()
+    candidates = [(root / "store.json", "Kopie der Einstellungen")] + [(p, p.name) for p in backup_files()]
+    for path, label in candidates:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        store = data.get("store") if isinstance(data, dict) and "store" in data else data
+        if valid_store(store):
+            write_json(STORE_FILE, store)
+            RESTORED.update(source=label, created=data.get("created") or datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat(timespec="seconds"))
+            log.warning("Einstellungen aus %s wiederhergestellt", path)
+            return
+
+
+async def backup_loop(app):
+    """Einmal am Tag sichern (erstmals kurz nach dem Start) – auch Umbenennungen außerhalb des Add-ons landen so in der Geräteliste."""
+    async def run():
+        await asyncio.sleep(60)
+        checked = 0
+        while True:
+            if time.time() - max(newest_backup_time(), checked) >= BACKUP_DAILY - 120:
+                checked = time.time()
+                await safe_backup("taeglich")
+            await asyncio.sleep(3600)
+    restore_on_start()
+    app["backup_task"] = asyncio.create_task(run())
+
+
+async def stop_backup_loop(app):
+    app["backup_task"].cancel()
 
 
 def common_prefix(object_ids):
@@ -678,6 +934,7 @@ async def assign_area(request):
     items = parse_request(body)
     if not items:
         raise web.HTTPBadRequest(text="Keine Geräte angegeben")
+    await safe_backup("vor-raum")
     errors, done = [], []
     targets = await resolve_areas(body, items)
     await create_missing_areas(targets, errors)
@@ -719,6 +976,8 @@ async def apply(request):
     errors, done = [], []
     pid = body.get("progress_id")
     prog_start(pid, len(items) * 2 + 4)
+    prog(pid, "Sichere den aktuellen Stand …", 0)
+    await safe_backup("vor-umbenennen")
     prog(pid, "Lese Entitäten …", 0)
     entities = (await ha([{"type": "config/entity_registry/list"}]))[0] if z2m_mode else []
     changes, skipped, _info = entity_changes(items, entities) if z2m_mode else ([], [], [])
@@ -895,6 +1154,8 @@ async def selftest(app):
 def make_app():
     app = web.Application(middlewares=[errors])
     app.on_startup.append(selftest)
+    app.on_startup.append(backup_loop)
+    app.on_cleanup.append(stop_backup_loop)
     app.add_routes([
         web.get("/", index),
         web.get("/api/state", get_state),
@@ -908,6 +1169,11 @@ def make_app():
         web.get("/api/progress", progress),
         web.get("/api/z2m_bases", z2m_bases),
         web.post("/api/assign_area", assign_area),
+        web.get("/api/z2m_uis", z2m_uis),
+        web.get("/api/backups", list_backups),
+        web.post("/api/backups", create_backup),
+        web.post("/api/backups/restore", restore_backup),
+        web.get("/api/backups/{name}", get_backup),
     ])
     return app
 

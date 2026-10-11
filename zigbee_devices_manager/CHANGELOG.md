@@ -1,5 +1,17 @@
 # Änderungen
 
+## 0.8.0
+
+*11.10.2026*
+
+- **Direkt zum Gerät springen:** Neue Spalte „Öffnen“ in der Geräteliste – „ⓘ Z2M“ öffnet die Info-Seite des Geräts in der Zigbee2MQTT-Oberfläche, „⌂ HA“ die Geräteseite in Home Assistant.
+- Die Z2M-Oberfläche wird automatisch gefunden (Zigbee2MQTT-Add-on oder `frontend.url`); bei mehreren Instanzen im Tab „Gateways“ unter „Z2M-Oberfläche“ auswählen.
+- **Automatische Sicherungen** von Namensschema, Zuordnungen, Gateways und Geräteliste unter `/config/zigbee_devices_manager/backups` (übersteht eine Neuinstallation, ist in HA-Backups enthalten). Im Tab „Export“: Liste, „Jetzt sichern“, Wiederherstellen, Download als JSON/CSV.
+- Fehlen die Einstellungen beim Start, wird der letzte gesicherte Stand automatisch zurückgeholt.
+- Fix: War Home Assistant beim Öffnen nicht erreichbar, konnten die gespeicherten Einstellungen durch Standardwerte überschrieben werden.
+- Einstellungen werden jetzt so gespeichert, dass ein Absturz keine halbe Datei hinterlässt.
+- Das Add-on braucht dafür lesenden Zugriff auf die Supervisor-API (`hassio_api`).
+
 ## 0.7.0
 
 *10.10.2026*

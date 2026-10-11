@@ -39,6 +39,8 @@ Namensschema vergibst.
 - Geplante Geräte reservieren Namen/Nummern
 - Entity-IDs mitumbenennen (Standard: an, abwählbar)
 - Export als CSV/JSON, Schema-Export/-Import
+- **Direkt zum Gerät springen:** In der Geräteliste öffnet „ⓘ Z2M“ die Info-Seite des Geräts in der Zigbee2MQTT-Oberfläche (MQTT-Topic, Exposes, Einstellungen), „⌂ HA“ die Geräteseite in Home Assistant (Entitäten, Bereich, MQTT-Info). Die Z2M-Oberfläche findet das Add-on selbst (Zigbee2MQTT-Add-on per Ingress oder `frontend.url` aus Z2M); bei mehreren Instanzen wählst du sie im Tab „Gateways“ unter „Z2M-Oberfläche“ aus oder trägst eine Adresse wie `http://192.168.1.10:8080` ein.
+- **Automatische Sicherung:** Namensschema, Zuordnungen, geplante Geräte, Gateways und die Geräteliste aus HA werden gesichert – nach Änderungen höchstens stündlich, täglich, vor jedem Umbenennen/Raum-Zuweisen und vor jeder Wiederherstellung (unveränderte Stände nicht doppelt, die letzten 60 bleiben). Ablage: `/config/zigbee_devices_manager/backups` – übersteht eine Neuinstallation und ist in jedem HA-Backup enthalten. Fehlen die Einstellungen beim Start, holt das Add-on den letzten Stand selbst zurück. Im Tab „Export“: Liste aller Sicherungen, „Jetzt sichern“, Wiederherstellen, Download als JSON oder Geräteliste als CSV, Wiederherstellen aus einer Datei.
 
 ## Installation
 
@@ -66,7 +68,8 @@ herunterladen und im Browser öffnen. Neu erzeugen mit `python3 scripts/build_de
   Konfiguration prüfen/neu laden, Node-RED danach neu starten. Das Add-on bindet dafür `/config` und `/addon_configs` ein.
   Nicht geändert werden `.storage`, `custom_components`, `secrets.yaml`.
 - Echtes Anlernen neuer Geräte passiert weiterhin in ZHA/Z2M; neue Geräte erscheinen hier automatisch als „neu“.
-- Schema und Zuweisungen liegen in `/data/store.json` des Add-ons.
+- Schema und Zuweisungen liegen in `/data/store.json` des Add-ons, eine Kopie und die Sicherungen unter `/config/zigbee_devices_manager/`. Wer bewusst neu anfangen will, löscht vor der Neuinstallation auch diesen Ordner.
+- Das Add-on liest über die Supervisor-API (`hassio_api`, nur lesend) die installierten Zigbee2MQTT-Add-ons, um deren Oberfläche zu verlinken.
 - Änderungen je Version: [`zigbee_devices_manager/CHANGELOG.md`](zigbee_devices_manager/CHANGELOG.md) – Home Assistant zeigt sie im Update-Dialog.
 
 ## Fehlersuche
