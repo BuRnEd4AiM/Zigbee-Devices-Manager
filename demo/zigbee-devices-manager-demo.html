@@ -1203,6 +1203,10 @@ const netApi = {
     if (!r.ok) throw new Error(await r.text());
     return r.json();
   },
+  async permitVia(inst, router, seconds) {
+    if (api.demo) return;
+    await api.post("api/permit_join", {source: "z2m", base_topic: inst.base, time: seconds, device: router});
+  },
   async start(inst) {
     if (api.demo) { this.demoScans[inst.id] = Date.now(); return {running: true, started: new Date().toISOString()}; }
     return api.post("api/networkmap", {base_topic: inst.base});
@@ -1214,6 +1218,17 @@ async function loadNetwork(inst) {
   NET.data[inst.id].base = inst.base; // Basis-Topic kann erst nach dem Laden erkannt werden – dann neu laden
   if (NET.data[inst.id].scan?.running) pollScan(inst);
   if (!$("#tab-network").hidden) renderNetwork();
+}
+/** Reiter öffnen bzw. Instanz wechseln: sofort den bekannten Stand zeigen, dann still nachsehen, ob es eine neuere Karte gibt
+ *  (z. B. weil sie inzwischen in der Oberfläche von Zigbee2MQTT geladen wurde). */
+async function netEnter() {
+  renderNetwork();
+  const inst = netInstances().find(i => i.id === NET.inst), d = inst && NET.data[inst.id];
+  if (!d || d.scan?.running || d.base !== inst.base) return;
+  try {
+    const fresh = await netApi.load(inst);
+    if (fresh.scanned_at !== d.scanned_at || !!fresh.scan?.error !== !!d.scan?.error) { NET.data[inst.id] = {...fresh, base: inst.base}; if (!$("#tab-network").hidden) renderNetwork(); }
+  } catch (e) { /* bekannter Stand bleibt */ }
 }
 /** Fragt während eines Scans alle 2 s nach dem Stand; aktualisiert nur die Statuszeile, am Ende den ganzen Baum. */
 function pollScan(inst) {
@@ -1262,10 +1277,10 @@ function renderNetwork() {
   const head = `<div class="bar">
       ${insts.length > 1 ? `<div class="chips">${insts.map(i => `<button data-inst="${esc(i.id)}" class="${i.id === inst.id ? "on" : ""}">${esc(i.label)}</button>`).join("")}</div>` : `<b>${esc(inst.label)}</b>`}
       <span class="sub">${inst.base ? `Basis-Topic <code>${esc(inst.base)}</code>` : "Basis-Topic unbekannt – im Tab „Gateways“ eintragen"}</span>
-      <span class="sub">${d?.value ? `Letzter Scan: ${esc(fmtDate(d.scanned_at))}${d.source?.startsWith("sensor.") ? ` (aus ${esc(d.source)})` : ""}` : ""}</span>
+      <span class="sub">${d?.value ? `Letzter Scan: ${esc(fmtDate(d.scanned_at))}${d.source?.startsWith("sensor.") ? ` (aus ${esc(d.source)})` : d.source === "zigbee2mqtt" ? " (von Zigbee2MQTT übernommen)" : ""}` : ""}</span>
       <span style="flex:1"></span><span id="netStatus"></span>
       <button class="btn primary" id="netScan" title="Fragt alle Router nach ihren Nachbarn und deren Empfang (LQI). Belastet das Netz kurz, deshalb nur auf Knopfdruck.">Scan starten</button>
-    </div>${d?.scan?.error ? `<div class="banner" style="border-left-color:var(--new)">${esc(d.scan.error)}</div>` : ""}`;
+    </div>${d?.scan?.error && !(d.scanned_at && d.scan.started && new Date(d.scanned_at) >= new Date(d.scan.started)) ? `<div class="banner" style="border-left-color:var(--new)">${esc(d.scan.error)}</div>` : ""}`;
   if (!d || (d.base !== inst.base && !d.scan?.running)) { root.innerHTML = head + `<p class="sub"><span class="spin"></span> Lade …</p>`; netBind(root, inst); netStatus(); loadNetwork(inst); return; }
   if (d.error || !d.value) {
     root.innerHTML = head + `<div class="panel"><p>${d.error ? "Netzwerkdaten nicht lesbar: " + esc(d.error) : "Für diese Instanz gibt es noch keinen Scan."}</p>
@@ -1339,6 +1354,42 @@ function renderNetwork() {
   if (d.scan?.running) pollScan(inst);
 }
 
+/** „(zwischen A und B)“: wo auf dem Weg die schwächste Verbindung liegt. */
+function weakestHop(t, path) {
+  let worst = null;
+  for (const k of path.slice(1)) { const x = t.all.get(k); if (x?.link && (!worst || x.link.lqi < worst.link.lqi)) worst = x; }
+  return worst && path.length > 2 ? ` <span class="sub">zwischen ${esc(t.all.get(worst.parent)?.node.name || "")} und ${esc(worst.node.name)}</span>` : "";
+}
+/** „Besser verbinden“: Einen Weg vorschreiben kann man in Zigbee nicht – ein Endgerät lässt sich aber gezielt über einen
+ *  Router neu anlernen und hängt dann an diesem. Router suchen sich ihren Weg selbst. */
+function netBetter(t, n) {
+  const nd = n.node, th = netThresholds();
+  if (nd.placeholder || nd.type === "Coordinator") return "";
+  const head = `<h2 style="font-size:14px;margin:14px 0 4px">Besser verbinden</h2>`;
+  if (nd.type === "Router") {
+    return head + `<p class="sub">Router suchen sich ihren Weg selbst und wechseln von allein, wenn ein besserer da ist – vorschreiben lässt sich das nicht.
+      Helfen kann: ein Repeater oder weiterer Router zwischen ihm und ${n.parent ? esc(t.all.get(n.parent).node.name) : "dem Koordinator"}, Lampen nicht am Wandschalter ausschalten
+      (ausgeschaltete Router unterbrechen Wege), Abstand zu WLAN-Router und USB-3-Geräten.</p>`;
+  }
+  const area = k => S.devices.find(x => (x.ieee || "").toLowerCase() === k)?.area || "";
+  const mine = area(n.ieee);
+  const cands = [...t.all.values()]
+    .filter(x => ["Coordinator", "Router"].includes(x.node.type) && !x.node.placeholder && x.bottleneck !== null && !x.node.failed.includes("lqi"))
+    .map(x => ({x, same: !!mine && area(x.ieee) === mine, b: Number.isFinite(x.bottleneck) ? x.bottleneck : 255, room: area(x.ieee)}))
+    .sort((a, b) => (b.same - a.same) || (b.b - a.b) || a.x.node.name.localeCompare(b.x.node.name, "de"));
+  if (!cands.length) return head + `<p class="sub">Im Scan ist kein erreichbarer Router, über den sich das Gerät anlernen ließe.</p>`;
+  const best = cands[0];
+  const advice = best.x.ieee === n.parent
+    ? `Hängt schon am stärksten Router${best.same ? ` im Raum „${esc(mine)}“` : ""}.`
+    : `Vorschlag: <b>${esc(best.x.node.name)}</b>${best.same ? ` (gleicher Raum)` : best.room ? ` (${esc(best.room)})` : ""} – Weg zum Koordinator ${q2(best.b, th)}.`;
+  return head + `<p class="sub">Einen Weg vorschreiben kann man in Zigbee nicht. Ein Endgerät bleibt aber bei seinem Parent, bis es ihn verliert –
+      lernst du es gezielt <b>nur über einen bestimmten Router</b> neu an, hängt es danach an diesem. Wähle einen Router in der Nähe des Geräts mit starkem Weg zum Koordinator.</p>
+    <p style="margin:6px 0">${advice}</p>
+    <div class="row"><select id="netVia" style="flex:1;min-width:0">${cands.map(c => `<option value="${esc(c.x.ieee)}">${esc(c.x.node.name)}${c.same ? " · gleicher Raum" : c.room ? " · " + esc(c.room) : ""} · Weg ${c.b}${c.x.ieee === n.parent ? " · jetzt" : ""}</option>`).join("")}</select></div>
+    <button class="btn" id="netViaGo" title="Erlaubt 4 Minuten lang das Anlernen nur über den gewählten Router">Über diesen Router neu anlernen</button>
+    <div id="netViaInfo"></div>`;
+}
+const q2 = (v, th) => `<span class="q ${ZigbeeTree.lqiClass(v, th)}">${v}</span>`;
 /** Detailbereich zum gewählten Gerät. */
 function netShowDetail(t, inst) {
   const box = $("#netDetail"), n = t.all.get(NET.sel);
@@ -1356,7 +1407,7 @@ function netShowDetail(t, inst) {
       <span>IEEE</span><code>${esc(n.ieee)}</code>
       <span>Netzwerkadresse</span><code>${nd.nwk === null ? "–" : "0x" + nd.nwk.toString(16).padStart(4, "0")}</code>
       <span>Parent</span><span>${n.parent ? `<a href="#" data-goto="${esc(n.parent)}">${esc(name(n.parent))}</a> ${q(n.link?.lqi)}${n.guessed ? ` <span class="sub">vermutet</span>` : ""}` : n === t.coordinator ? "– (Wurzel)" : "nicht verbunden"}</span>
-      ${path.length > 1 && path[0] === t.coordinator?.ieee ? `<span>Weg</span><span>${path.map(k => esc(name(k))).join(" → ")}</span><span>Schwächste Stelle</span><span>${q(Number.isFinite(n.bottleneck) ? n.bottleneck : null)}</span>` : ""}
+      ${path.length > 1 && path[0] === t.coordinator?.ieee ? `<span>Weg</span><span>${path.map(k => esc(name(k))).join(" → ")}</span><span>Schwächste Stelle</span><span>${q(Number.isFinite(n.bottleneck) ? n.bottleneck : null)}${weakestHop(t, path)}</span>` : ""}
       ${n.children.length ? `<span>Hängen dran</span><span>${n.children.length} direkt, ${n.descendants} insgesamt</span>` : ""}
       <span>Zuletzt gesehen</span><span>${nd.type === "Coordinator" ? "–" : netAgo(nd.lastSeen)}</span>
       ${dev ? `<span>In Home Assistant</span><span>${esc(dev.name)}${dev.area ? " · " + esc(dev.area) : ""}</span>` : ""}
@@ -1366,7 +1417,19 @@ function netShowDetail(t, inst) {
     ${n.neighbors.length ? `<table class="nbt"><thead><tr><th>Gerät</th><th>Rolle</th><th title="Wie gut der Nachbar dieses Gerät empfängt">hört es</th><th title="Wie gut dieses Gerät den Nachbarn empfängt">hört ihn</th></tr></thead>
       <tbody>${n.neighbors.map(e => `<tr data-goto="${esc(e.ieee)}"><td>${esc(name(e.ieee))}</td><td class="sub">${NET_ROLES[e.role]}</td><td>${q(e.lqiOut)}</td><td>${q(e.lqiIn)}</td></tr>`).join("")}</tbody></table>`
       : `<p class="sub">Keine Nachbarn im Scan.</p>`}`;
+  box.insertAdjacentHTML("beforeend", netBetter(t, n));
   box.querySelectorAll("[data-goto]").forEach(el => el.onclick = e => { e.preventDefault(); netGoto(el.dataset.goto); });
+  const cur = inst || netInstances().find(i => i.id === NET.inst);
+  $("#netViaGo", box) && ($("#netViaGo", box).onclick = async () => {
+    const via = $("#netVia", box).value, viaName = name(via), info = $("#netViaInfo", box);
+    try {
+      await netApi.permitVia(cur, via, 240);
+      info.innerHTML = `<div class="banner" style="border-left-color:var(--ok);color:var(--fg);margin-top:8px"><b>Anlernen nur über ${esc(viaName)} ist 4 Minuten offen.</b><br>
+        Jetzt ${esc(nd.name)} neu koppeln: Anlern-/Reset-Knopf drücken, bis es blinkt (bei SONOFF-Sensoren etwa 5 s halten). Zigbee2MQTT erkennt das Gerät an seiner IEEE – Name und Einstellungen bleiben.
+        Danach „Scan starten“, um den neuen Parent zu sehen.<br><button class="btn" id="netViaStop" style="margin-top:6px">Anlernen beenden</button></div>`;
+      $("#netViaStop", box).onclick = async () => { try { await netApi.permitVia(cur, "", 0); toast("Anlernen beendet"); info.innerHTML = ""; } catch (e) { toast("Fehler: " + e.message); } };
+    } catch (e) { toast("Anlernen nicht gestartet: " + e.message); }
+  });
   if (dev) {
     $(".lnk.ha", box) && ($(".lnk.ha", box).onclick = e => haNavigate(e, haDevicePath(dev)));
     $(".lnk.z2m", box) && ($(".lnk.z2m", box).onclick = e => openZ2m(e, z2mLink(dev)));
@@ -1388,7 +1451,7 @@ function netGoto(ieee) {
 }
 
 function netBind(root, inst) {
-  root.querySelectorAll("[data-inst]").forEach(b => b.onclick = () => { NET.inst = b.dataset.inst; NET.sel = ""; renderNetwork(); });
+  root.querySelectorAll("[data-inst]").forEach(b => b.onclick = () => { NET.inst = b.dataset.inst; NET.sel = ""; netEnter(); });
   $("#netScan", root) && ($("#netScan", root).onclick = async () => {
     try {
       const sc = await netApi.start(inst);
@@ -1570,7 +1633,7 @@ async function restoreBackup(payload, label) {
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
   document.querySelectorAll("main section").forEach(s => s.hidden = s.id !== "tab-" + b.dataset.tab);
-  ({devices: renderDevices, gateways: renderGateways, network: renderNetwork, scheme: renderScheme, export: renderExport})[b.dataset.tab]();
+  ({devices: renderDevices, gateways: renderGateways, network: netEnter, scheme: renderScheme, export: renderExport})[b.dataset.tab]();
 });
 
 (async () => {

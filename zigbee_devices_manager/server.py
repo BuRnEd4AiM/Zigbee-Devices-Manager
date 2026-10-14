@@ -336,12 +336,19 @@ async def z2m_request(base, action, payload, timeout=12):
         raise web.HTTPBadGateway(text=f"Keine Verbindung zu Home Assistant ({WS_URL}): {err!r}")
 
 
-async def known_bases_hint():
+async def found_bases():
+    """Basis-Topics der laufenden Zigbee2MQTT-Instanzen (über ihr zurückgehaltenes <base>/bridge/info); None = MQTT nicht lesbar."""
     try:
-        bases = [b for t, _ in await mqtt_collect(["+/bridge/info", "+/+/bridge/info"], 2.0) if (b := t.removesuffix("/bridge/info"))]
+        return sorted({b for t, _ in await mqtt_collect(["+/bridge/info", "+/+/bridge/info"], 2.0) if (b := t.removesuffix("/bridge/info"))})
     except web.HTTPException:
+        return None
+
+
+async def known_bases_hint():
+    bases = await found_bases()
+    if bases is None:
         return ""
-    return f" Gefundene Zigbee2MQTT-Basis-Topics: {', '.join(sorted(set(bases)))}." if bases else " Es wurde kein Zigbee2MQTT über MQTT gefunden."
+    return f" Gefundene Zigbee2MQTT-Basis-Topics: {', '.join(bases)}." if bases else " Es wurde kein Zigbee2MQTT über MQTT gefunden."
 
 
 async def z2m_failure(base, result):
@@ -362,10 +369,14 @@ async def permit_join(request):
         cmd = {"type": "call_service", "domain": "zha", "service": "permit", "service_data": {"duration": seconds}}
     else:
         base = safe_topic(body.get("base_topic"))
-        failure = await z2m_failure(base, await z2m_request(base, "permit_join", {"time": seconds}, timeout=8))
+        payload = {"time": seconds}
+        via = body.get("device")
+        if seconds and isinstance(via, str) and 0 < len(via) <= 100:
+            payload["device"] = via  # nur über diesen Router (IEEE oder Name) anlernen – das Gerät hängt danach an ihm
+        failure = await z2m_failure(base, await z2m_request(base, "permit_join", payload, timeout=8))
         if failure:
             raise web.HTTPBadGateway(text=failure)
-        return web.json_response({"ok": True, "time": seconds})
+        return web.json_response({"ok": True, "time": seconds, "device": payload.get("device", "")})
     await ha([cmd])
     return web.json_response({"ok": True, "time": seconds})
 
@@ -688,6 +699,10 @@ async def run_networkmap(base):
             failure = "Zigbee2MQTT meldet den Scan als fertig, die Antwort kam aber nicht beim Add-on an. Bitte erneut versuchen."
         elif result.get("status") == "timeout" and prog["started"]:
             failure = f"Zigbee2MQTT scannt nach {NETMAP_TIMEOUT // 60} Minuten noch immer. Router ohne Antwort: {', '.join(prog['no_answer']) or 'keine gemeldet'}."
+        elif result.get("status") == "timeout" and base in (await found_bases() or []):
+            # Basis-Topic stimmt – Z2M ist nur langsam (meist Router, die nicht antworten); das Ergebnis kommt evtl. noch über den Sensor
+            failure = (f"Zigbee2MQTT („{base}“) hat nach {NETMAP_TIMEOUT // 60} Minuten nicht geantwortet. Der Basis-Topic stimmt – "
+                       "meist antworten einzelne Router nicht (z. B. Lampen am Wandschalter aus). Kommt das Ergebnis später, zeigt der Reiter es über den Networkmap-Sensor an.")
         value = (result.get("data") or {}).get("value") if isinstance(result.get("data"), dict) else None
         if not failure and not (isinstance(value, dict) and isinstance(value.get("nodes"), list)):
             failure = "Zigbee2MQTT hat keine Networkmap geliefert" + (f" ({result.get('status')})" if result.get("status") else "")
@@ -712,6 +727,58 @@ async def start_networkmap(request):
                        "z2m": {"started": False, "finished": False, "no_answer": []}}
         background(run_networkmap(base))
     return web.json_response(SCANS[base])
+
+
+def store_networkmap(topic, payload):
+    """Speichert eine Netzwerkkarte, die Zigbee2MQTT auf <base>/bridge/response/networkmap verschickt hat (raw-Format)."""
+    base = topic.removesuffix("/bridge/response/networkmap")
+    if base == topic or not TOPIC_RE.match(base):
+        return
+    try:
+        msg = json.loads(payload)
+    except (TypeError, ValueError):
+        return
+    data = msg.get("data") if isinstance(msg, dict) else None
+    if not isinstance(data, dict) or msg.get("status") != "ok" or data.get("type") != "raw":
+        return  # Fehlermeldung oder anderes Format (graphviz/plantuml)
+    value = data.get("value")
+    if isinstance(value, dict) and isinstance(value.get("nodes"), list):
+        write_json(netmap_file(base), {"base_topic": base, "scanned_at": iso_now(), "value": value, "source": "zigbee2mqtt"})
+        log.info("Netzwerkkarte von %s übernommen (%d Geräte)", base, len(value["nodes"]))
+
+
+async def netmap_listener(app):
+    """Hört dauerhaft auf die Netzwerkkarten aller Zigbee2MQTT-Instanzen. Wird die Karte irgendwo geladen – in der Oberfläche
+    von Zigbee2MQTT („Netzwerk“), per Automation oder hier –, landet sie automatisch im Reiter „Netzwerk“."""
+    async def run():
+        delay = 5
+        while True:
+            try:
+                async with ClientSession() as session, session.ws_connect(WS_URL, max_msg_size=0) as ws:
+                    await ws.receive_json()
+                    await ws.send_json({"type": "auth", "access_token": TOKEN})
+                    if (await ws.receive_json())["type"] != "auth_ok":
+                        raise ValueError("Authentifizierung fehlgeschlagen")
+                    for i, topic in enumerate(["+/bridge/response/networkmap", "+/+/bridge/response/networkmap"], 1):
+                        await ws.send_json({"id": i, "type": "mqtt/subscribe", "topic": topic})
+                    delay = 5
+                    while True:
+                        msg = await ws.receive_json()
+                        if msg.get("type") == "event":
+                            store_networkmap(msg["event"].get("topic", ""), msg["event"].get("payload", ""))
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001 – Verbindung weg (z. B. HA-Neustart): später neu verbinden
+                log.debug("Netzwerkkarten-Abo unterbrochen: %r", err)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 300)
+    if TOKEN:
+        app["netmap_task"] = asyncio.create_task(run())
+
+
+async def stop_netmap_listener(app):
+    if "netmap_task" in app:
+        app["netmap_task"].cancel()
 
 
 async def tree_js(request):
@@ -1347,7 +1414,9 @@ def make_app():
     app = web.Application(middlewares=[errors])
     app.on_startup.append(selftest)
     app.on_startup.append(backup_loop)
+    app.on_startup.append(netmap_listener)
     app.on_cleanup.append(stop_backup_loop)
+    app.on_cleanup.append(stop_netmap_listener)
     app.add_routes([
         web.get("/", index),
         web.get("/zigbee-tree.js", tree_js),

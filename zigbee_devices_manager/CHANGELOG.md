@@ -5,7 +5,10 @@
 *14.10.2026*
 
 - Netzwerk-Scan: Die Statuszeile zeigt live, welche Router nicht antworten (aus dem Log von Zigbee2MQTT). Jeder davon kostet ~25 s – z. B. Lampen, die am Wandschalter aus sind.
-- Der Scan darf jetzt bis zu 15 Minuten dauern (vorher 5). Bleibt die Antwort aus, sagt die Meldung, ob Z2M noch scannt oder schon fertig war.
+- Der Scan darf jetzt bis zu 15 Minuten dauern (vorher 5). Bleibt die Antwort aus, sagt die Meldung, ob Z2M noch scannt oder schon fertig war – und nicht mehr fälschlich „stimmt der Basis-Topic?“, wenn er stimmt.
+- **Netzwerkkarte automatisch von der Bridge:** Wird die Karte in der Oberfläche von Zigbee2MQTT („Netzwerk“) oder anderswo geladen, übernimmt der Reiter sie von selbst – auch ohne eigenen Networkmap-Sensor. Beim Öffnen des Reiters wird nachgesehen, ob es eine neuere Karte gibt.
+- **Besser verbinden:** Für Endgeräte schlägt der Reiter einen Router vor (gleicher Raum, starker Weg zum Koordinator) und öffnet das Anlernen 4 Minuten lang nur über diesen Router – nach dem erneuten Koppeln hängt das Gerät an ihm. Für Router gibt es Hinweise; die schwächste Stelle auf dem Weg wird benannt.
+- Eine Fehlermeldung zum Scan verschwindet, sobald doch eine neuere Karte angekommen ist.
 
 ## 0.9.0
 
