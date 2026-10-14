@@ -590,8 +590,9 @@ async def stop_backup_loop(app):
 
 
 # ---------- Netzwerk (Reiter „Netzwerk“) ----------
-NETMAP_TIMEOUT = 300   # Z2M fragt jeden Router einzeln ab (1 s Pause, bei Fehlern 5 s): große Netze brauchen Minuten
-SCANS = {}             # Basis-Topic → {"running", "started", "finished", "error"}
+NETMAP_TIMEOUT = 900   # Z2M fragt jeden Router einzeln ab; antwortet einer nicht, kostet er ~25 s (Wartezeit, 5 s Pause, 2. Versuch)
+SCANS = {}             # Basis-Topic → {"running", "started", "finished", "error", "z2m": Fortschritt laut Z2M-Log}
+NO_LQI_RE = re.compile(r"Failed to execute LQI for '(.+)'")
 
 
 def netmap_file(base):
@@ -645,11 +646,48 @@ async def get_networkmap(request):
     return web.json_response({"base_topic": base, "scan": SCANS.get(base) or {}, **data})
 
 
+async def watch_scan_log(base, state):
+    """Liest während des Scans das Log von Zigbee2MQTT (<base>/bridge/logging, Stufe info und höher) mit:
+    ob Z2M den Scan begonnen/beendet hat und welche Router nicht antworten – für die Statuszeile im Reiter."""
+    prog = state["z2m"]
+    try:
+        async with ClientSession() as session, session.ws_connect(WS_URL, max_msg_size=0) as ws:
+            await ws.receive_json()
+            await ws.send_json({"type": "auth", "access_token": TOKEN})
+            if (await ws.receive_json())["type"] != "auth_ok":
+                return
+            await ws.send_json({"id": 1, "type": "mqtt/subscribe", "topic": f"{base}/bridge/logging"})
+            while True:
+                msg = await ws.receive_json()
+                if msg.get("type") != "event":
+                    continue
+                try:
+                    text = str(json.loads(msg["event"]["payload"]).get("message", ""))
+                except (KeyError, ValueError, AttributeError):
+                    continue
+                if text.startswith("Starting network scan"):
+                    prog["started"] = True
+                elif text.startswith("Network scan finished"):
+                    prog["finished"] = True
+                elif m := NO_LQI_RE.search(text):
+                    if m.group(1) not in prog["no_answer"]:
+                        prog["no_answer"].append(m.group(1))
+    except (ClientError, asyncio.TimeoutError, ValueError, TypeError):
+        pass  # nur Anzeige – der Scan selbst läuft unabhängig davon
+
+
 async def run_networkmap(base):
     state = SCANS[base]
+    watcher = asyncio.create_task(watch_scan_log(base, state))
     try:
+        await asyncio.sleep(0.5)  # Log-Abo steht, bevor die Anfrage rausgeht
         result = await z2m_request(base, "networkmap", {"type": "raw", "routes": False}, timeout=NETMAP_TIMEOUT)
         failure = await z2m_failure(base, result)
+        prog = state["z2m"]
+        if result.get("status") == "timeout" and prog["finished"]:
+            failure = "Zigbee2MQTT meldet den Scan als fertig, die Antwort kam aber nicht beim Add-on an. Bitte erneut versuchen."
+        elif result.get("status") == "timeout" and prog["started"]:
+            failure = f"Zigbee2MQTT scannt nach {NETMAP_TIMEOUT // 60} Minuten noch immer. Router ohne Antwort: {', '.join(prog['no_answer']) or 'keine gemeldet'}."
         value = (result.get("data") or {}).get("value") if isinstance(result.get("data"), dict) else None
         if not failure and not (isinstance(value, dict) and isinstance(value.get("nodes"), list)):
             failure = "Zigbee2MQTT hat keine Networkmap geliefert" + (f" ({result.get('status')})" if result.get("status") else "")
@@ -662,6 +700,7 @@ async def run_networkmap(base):
         log.exception("Netzwerk-Scan für %s fehlgeschlagen", base)
         state.update(error=f"Scan fehlgeschlagen: {getattr(err, 'text', None) or err!r}")
     finally:
+        watcher.cancel()
         state.update(running=False, finished=iso_now())
 
 
@@ -669,7 +708,8 @@ async def start_networkmap(request):
     """Startet den Scan im Hintergrund (er dauert oft länger als eine HTTP-Anfrage warten sollte); die Oberfläche fragt nach."""
     base = safe_topic((await request.json()).get("base_topic"))
     if not (SCANS.get(base) or {}).get("running"):
-        SCANS[base] = {"running": True, "started": iso_now(), "finished": "", "error": ""}
+        SCANS[base] = {"running": True, "started": iso_now(), "finished": "", "error": "",
+                       "z2m": {"started": False, "finished": False, "no_answer": []}}
         background(run_networkmap(base))
     return web.json_response(SCANS[base])
 

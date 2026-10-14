@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.9.1
+
+*14.10.2026*
+
+- Netzwerk-Scan: Die Statuszeile zeigt live, welche Router nicht antworten (aus dem Log von Zigbee2MQTT). Jeder davon kostet ~25 s – z. B. Lampen, die am Wandschalter aus sind.
+- Der Scan darf jetzt bis zu 15 Minuten dauern (vorher 5). Bleibt die Antwort aus, sagt die Meldung, ob Z2M noch scannt oder schon fertig war.
+
 ## 0.9.0
 
 *14.10.2026*

@@ -112,7 +112,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 </main>
 <div class="toast" id="toast"></div>
 
-<script src="zigbee-tree.js?v=0.9.0"></script>
+<script src="zigbee-tree.js?v=0.9.1"></script>
 <script>
 // ---------- Konfiguration / Standarddaten ----------
 const DEMO_FORCED = window.ZDM_DEMO === true;
@@ -1007,7 +1007,14 @@ function netStatus() {
   const box = $("#netStatus"), inst = netInstances().find(i => i.id === NET.inst);
   if (!box || !inst) return;
   const sc = NET.data[inst.id]?.scan || {}, secs = sc.started ? Math.max(0, Math.round((Date.now() - new Date(sc.started)) / 1000)) : 0;
-  box.innerHTML = sc.running ? `<span class="spin"></span> Scan läuft … ${secs} s <span class="sub">(dauert meist 10–60 s)</span>` : "";
+  const z = sc.z2m || {}, silent = z.no_answer || [];
+  // Fortschritt laut Z2M-Log: wer nicht antwortet, kostet je ~25 s (Wartezeit, Pause, zweiter Versuch)
+  const hint = z.finished ? "Zigbee2MQTT ist fertig – Ergebnis kommt …"
+    : silent.length ? `Antworten nicht: ${silent.map(esc).join(", ")} <span class="sub">(je ~25 s Wartezeit)</span>`
+    : secs > 20 && !z.started ? `<span class="sub">noch keine Meldung von Zigbee2MQTT</span>`
+    : secs > 60 ? `<span class="sub">Router, die nicht antworten (z. B. Lampen am Wandschalter aus), kosten je ~25 s</span>`
+    : `<span class="sub">(dauert meist 10–60 s)</span>`;
+  box.innerHTML = sc.running ? `<span class="spin"></span> Scan läuft … ${secs} s · ${hint}` : "";
   const btn = $("#netScan");
   if (btn) { btn.disabled = !!sc.running || !inst.base; btn.textContent = sc.running ? "Scan läuft …" : "Scan starten"; }
 }
