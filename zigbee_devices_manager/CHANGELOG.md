@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.8.1
+
+*14.10.2026*
+
+- **Fix: Verweise in Dashboards und Automationen gingen beim Umbenennen über Zigbee2MQTT teilweise verloren.** Z2M löscht die Entitäten in HA, legt sie neu an und benennt sie um – nicht immer genau so wie vorhergesagt, und bei vielen Geräten dauerte das länger, als das Add-on wartete. Jetzt wartet es, bis Z2M fertig ist, und ersetzt die Verweise mit den Entity-IDs, die HA tatsächlich hat (über die eindeutige ID jeder Entität).
+- Die Vorschau warnt, wenn Automationen/Dashboards die alten Entity-IDs nutzen, aber „Verweise anpassen“ aus ist – mit Haken zum direkten Mitanpassen.
+- Die Prüfung nach dem Umbenennen sucht auch ohne Haken nach alten Entity-IDs; „Alte IDs jetzt ersetzen“ repariert sie mit einem Klick.
+
 ## 0.8.0
 
 *11.10.2026*

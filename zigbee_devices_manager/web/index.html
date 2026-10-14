@@ -218,7 +218,8 @@ const api = {
       if (o.update_yaml) usages.push({kind: "yaml", title: "packages/licht.yaml", entities: [entities[0].old]});
       if (o.update_nodered) usages.push({kind: "nodered", title: "a0d7b954_nodered/flows.json", entities: entities.map(e => e.old)});
       const areas = !o.set_area ? [] : this.payload(list).filter(i => i.area_name && i.area_name !== i.current_area).map(i => ({device: i.name, from: i.current_area, to: i.area_name, create: !i.area_id}));
-      return {entities, skipped: [], usages, unreadable: 0, notes: [], areas};
+      const unhandled = o.update_references ? [] : [{kind: "dashboard", title: "Übersicht", entities: entities.map(e => e.old)}];
+      return {entities, skipped: [], usages, unhandled, unreadable: 0, notes: [], areas};
     }
     return this.post("api/plan", {items: this.payload(list), ...this.opts()});
   },
@@ -258,6 +259,11 @@ const api = {
     if (this.demo) return {checks: this.demoChecks(last)};
     return this.post("api/verify", {items: last.items, renamed: last.renamed, ...last.opts});
   },
+  /** Ersetzt nach der Prüfung übriggebliebene alte Entity-IDs in Automationen/Dashboards (und YAML/Node-RED, falls angehakt). */
+  async fixReferences(last) {
+    if (this.demo) return {updated_references: [{kind: "dashboard", title: "Übersicht"}], errors: [], checks: [{name: "Verweise", status: "ok", detail: "Beispiel: keine alten Entity-IDs mehr gefunden"}]};
+    return this.post("api/fix_references", {items: last.items, renamed: last.renamed, ...last.opts});
+  },
   async z2mUis() {
     if (this.demo) return DEMO_UIS;
     const r = await fetch("api/z2m_uis"); return r.ok ? r.json() : [];
@@ -294,6 +300,7 @@ const api = {
     if (o.rename_z2m) c.push({name: "Zigbee2MQTT", status: "ok", detail: last.items.length + " Gerät(e) heißen auch in Zigbee2MQTT wie geplant"});
     if (o.rename_entities) c.push({name: "Entity-IDs", status: "ok", detail: "Beispiel: alte IDs gibt es nicht mehr"});
     if (o.update_references || o.update_yaml || o.update_nodered) c.push({name: "Verweise", status: "ok", detail: "Beispiel: keine alten Entity-IDs mehr gefunden"});
+    else if (o.rename_entities) c.push({name: "Verweise", status: "warn", fix: true, detail: "Nicht angepasst (Haken aus) – diese zeigen jetzt ins Leere: Dashboard „Übersicht“ (Beispiel)"});
     if (o.update_nodered) c.push({name: "Node-RED", status: "info", detail: "Node-RED jetzt neu starten"});
     if (o.set_area) c.push({name: "Bereiche (Räume)", status: "ok", detail: "Beispiel: Geräte sind dem gewählten Bereich zugeordnet"});
     return c;
@@ -706,10 +713,15 @@ function confirmPlan(plan, count, areaOnly = false) {
       ${S.updateNodered ? `<p class="sub">Node-RED danach neu starten, sonst überschreibt ein Deploy die Änderung.</p>` : ""}
       ${S.updateYaml ? `<p class="sub">YAML geändert: danach Konfiguration prüfen und neu laden.</p>` : ""}
       <p class="sub">Vorher wird eine Sicherung der geänderten Konfigurationen unter /data/backups abgelegt.</p>` : ""}
+      ${!areaOnly && S.renameEntities && !S.updateRefs && (plan.unhandled || []).length ? `<div class="banner" style="border-left-color:var(--new);margin:12px 0 0;color:var(--fg)">
+        <b>⚠ ${plan.unhandled.length} Automation(en)/Dashboard(s) verwenden diese Entity-IDs</b> und zeigen danach ins Leere, wenn sie nicht angepasst werden:
+        <div class="sub" style="max-height:90px;overflow:auto;margin:4px 0">${plan.unhandled.map(u => `${kinds[u.kind] || u.kind}: <b>${esc(u.title)}</b> (${u.entities.length})`).join("<br>")}</div>
+        <label><input type="checkbox" id="fixRefs" checked> Verweise in Automationen, Skripten, Szenen und Dashboards mit anpassen (vorher gesichert)</label></div>` : ""}
       <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="no">Abbrechen</button><button class="btn primary" id="yes">${areaOnly ? "Zuweisen" : "Umbenennen"}</button></div>`;
     document.body.appendChild(dlg); dlg.showModal();
     const end = v => { dlg.close(); dlg.remove(); resolve(v); };
-    $("#no", dlg).onclick = () => end(false); $("#yes", dlg).onclick = () => end(true);
+    $("#no", dlg).onclick = () => end(false);
+    $("#yes", dlg).onclick = () => { if ($("#fixRefs", dlg)?.checked) { S.updateRefs = true; persist(); } end(true); };
     dlg.oncancel = () => end(false);
   });
 }
@@ -801,8 +813,17 @@ function showChecks(checks, last, errors) {
       dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${bad ? "❌ Prüfung: nicht alles hat geklappt" : warn ? "⚠️ Prüfung: bitte nachsehen" : "✅ Prüfung: alles wurde angepasst"}</h2>
         <div class="preview" style="line-height:1.6">${list.map(c => `${icon[c.status] || "•"} <b>${esc(c.name)}</b><div class="sub" style="margin:0 0 6px 24px">${esc(c.detail)}</div>`).join("") || "Keine Prüfung verfügbar."}
         ${errors.map(e => `❌ <b>${esc(e.device)}</b><div class="sub" style="margin:0 0 6px 24px">${esc(e.error)}</div>`).join("")}</div>
-        <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="re">Erneut prüfen</button><button class="btn primary" id="ok">Schließen</button></div>`;
+        <div class="row" style="justify-content:flex-end;margin:16px 0 0">${list.some(c => c.fix) ? `<button class="btn" id="fix" title="Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards durch die neuen (vorher gesichert)">Alte IDs jetzt ersetzen</button>` : ""}<button class="btn" id="re">Erneut prüfen</button><button class="btn primary" id="ok">Schließen</button></div>`;
       $("#ok", dlg).onclick = () => { dlg.close(); dlg.remove(); resolve(); };
+      $("#fix", dlg) && ($("#fix", dlg).onclick = async () => {
+        $("#fix", dlg).disabled = true; $("#fix", dlg).textContent = "Ersetze …";
+        try {
+          const r = await api.fixReferences(last), names = new Set(r.checks.map(c => c.name));
+          errors = r.errors || [];
+          toast(r.updated_references.length + " Automation(en)/Dashboard(s) angepasst");
+          draw([...list.filter(c => !names.has(c.name)), ...r.checks]); // nur die neu geprüften Punkte ersetzen
+        } catch (e) { toast("Ersetzen fehlgeschlagen: " + e.message); draw(list); }
+      });
       $("#re", dlg).onclick = async () => {
         $("#re", dlg).disabled = true; $("#re", dlg).textContent = "Prüfe…";
         try { draw((await api.verify(last)).checks); } catch (e) { toast("Prüfung fehlgeschlagen: " + e.message); draw(list); }

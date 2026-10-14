@@ -61,7 +61,8 @@ herunterladen und im Browser öffnen. Neu erzeugen mit `python3 scripts/build_de
   Basis-Topic je Gateway oder in den Add-on-Optionen: `z2m_base_topic`, Standard `zigbee2mqtt`); Home Assistant übernimmt den
   Namen von Z2M. ZHA-Geräte (oder Z2M ohne den Haken) werden in der Home-Assistant-Geräte-Registry umbenannt (`name_by_user`).
 - **Entity-IDs mitziehen:** Zeigt vor dem Umbenennen eine Vorschau der neuen Entity-IDs.
-- **Verweise anpassen:** Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards, die über die
+- **Verweise anpassen:** Maßgeblich sind die Entity-IDs, die Home Assistant nach dem Umbenennen tatsächlich hat (auch wenn Zigbee2MQTT sie selbst umbenennt). Ist der Haken aus, warnt die Vorschau, wenn Automationen/Dashboards die alten IDs nutzen; nach dem Umbenennen ersetzt „Alte IDs jetzt ersetzen“ übriggebliebene.
+  Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards, die über die
   Oberfläche gepflegt werden. Vorschau vorab, Sicherung der alten Konfiguration unter `/data/backups/`.
   Optional zusätzlich: **YAML-Dateien** unter `/config` (Packages, `configuration.yaml`, YAML-Dashboards …, reiner Textersatz
   mit Wortgrenzen, Kommentare bleiben erhalten) und **Node-RED-Flows** (`flows.json` im Node-RED-Add-on). Nach YAML-Änderungen

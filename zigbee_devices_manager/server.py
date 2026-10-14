@@ -642,6 +642,29 @@ def entity_changes(items, entities):
     return changes, skipped, info
 
 
+def ekey(ent):
+    """Bleibt beim Umbenennen gleich (auch wenn Z2M die Entität löscht und neu anlegt): Plattform + eindeutige ID."""
+    return ent.get("platform"), ent.get("unique_id")
+
+
+async def entity_ids_by_key():
+    return {ekey(e): e["entity_id"] for e in (await ha([{"type": "config/entity_registry/list"}]))[0]}
+
+
+async def wait_z2m_entities(keys, before, timeout):
+    """Zigbee2MQTT benennt mit „Entity-ID aktualisieren“ die Entity-IDs selbst um – in HA über Löschen, Neuanlegen und
+    Umbenennen. Wartet, bis alle betroffenen Entitäten wieder da sind, eine neue ID haben und der Stand sich nicht mehr
+    ändert (oder die Zeit um ist). Liefert den letzten Stand {Schlüssel: Entity-ID}."""
+    deadline, last = time.monotonic() + timeout, None
+    while True:
+        await asyncio.sleep(1.5)
+        current = await entity_ids_by_key()
+        snap = {k: current.get(k) for k in keys}
+        if (all(v and v != before[k] for k, v in snap.items()) and snap == last) or time.monotonic() >= deadline:
+            return current
+        last = snap
+
+
 async def scan_configs():
     """Liest alle per Oberfläche bearbeitbaren Automationen, Skripte, Szenen und Dashboards."""
     states, dashboards = await ha([{"type": "get_states"}, {"type": "lovelace/dashboards/list"}])
@@ -738,6 +761,58 @@ def parse_request(body):
     return items
 
 
+async def replace_references(body, mapping):
+    """Ersetzt alte Entity-IDs in Automationen/Skripten/Szenen/Dashboards, YAML-Dateien und Node-RED-Flows (je nach Optionen).
+    Vorher wird jede geänderte Konfiguration unter /data/backups gesichert. Liefert (geändert, nicht lesbar, Hinweise, Fehler)."""
+    changed_refs, errors = [], []
+    configs, unreadable = await scan_configs() if body.get("update_references") else ([], 0)
+    notes = []
+    if body.get("update_yaml") or body.get("update_nodered"):
+        files, notes = scan_files(body.get("update_yaml"), body.get("update_nodered"),
+                                  skip_ui_yaml=bool(body.get("update_references")))
+        configs += files
+    if not mapping:
+        return changed_refs, unreadable, notes, errors
+    rx = mapping_regex(mapping)
+    backup = DATA / "backups" / time.strftime("%Y%m%d-%H%M%S")
+    async with ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as http:
+        for it in configs:
+            text = item_text(it)
+            if not rx.search(text):
+                continue
+            backup.mkdir(parents=True, exist_ok=True)
+            label = it["title"] if it["kind"] in ("yaml", "nodered") else str(it["id"])
+            (backup / f"{it['kind']}__{slugify(label) or 'default'}.bak").write_text(text)
+            new_text = rx.sub(lambda m: mapping[m.group(1)], text)
+            if it["kind"] in ("yaml", "nodered"):
+                try:
+                    if it["kind"] == "nodered":
+                        json.loads(new_text)  # nur schreiben, wenn das Ergebnis gültiges JSON bleibt
+                    it["path"].write_text(new_text, encoding="utf-8")
+                    ok, res = True, ""
+                except (OSError, ValueError) as err:
+                    ok, res = False, str(err)
+                if ok:
+                    changed_refs.append({"kind": it["kind"], "title": it["title"]})
+                else:
+                    errors.append({"device": f"{it['kind']} {it['title']}", "error": res})
+                continue
+            new_cfg = json.loads(new_text)
+            if it["kind"] == "dashboard":
+                cmd = {"type": "lovelace/config/save", "config": new_cfg}
+                if it["url_path"]:
+                    cmd["url_path"] = it["url_path"]
+                ok, res = await ha_try(cmd)
+            else:
+                async with http.post(f"{CORE_API}/{it['path']}", json=new_cfg) as r:
+                    ok, res = r.status == 200, await r.text()
+            if ok:
+                changed_refs.append({"kind": it["kind"], "title": it["title"]})
+            else:
+                errors.append({"device": f"{it['kind']} {it['title']}", "error": res})
+    return changed_refs, unreadable, notes, errors
+
+
 async def collect_usages(body, mapping):
     """Sucht Verweise in UI-Konfigurationen, YAML-Dateien und Node-RED-Flows (je nach Optionen)."""
     items, unreadable, notes = [], 0, []
@@ -791,16 +866,19 @@ async def create_missing_areas(targets, errors):
 async def plan(request):
     body = await request.json()
     items = parse_request(body)
-    changes, skipped, usages, unreadable, notes, info = [], [], [], 0, [], []
+    changes, skipped, usages, unreadable, notes, info, unhandled = [], [], [], 0, [], [], []
     if body.get("rename_entities") and items:
         entities = (await ha([{"type": "config/entity_registry/list"}]))[0]
         changes, skipped, info = entity_changes(items, entities)
         if changes:
-            usages, unreadable, notes = await collect_usages(body, {c["old"]: c["new"] for c in changes})
+            mapping = {c["old"]: c["new"] for c in changes}
+            usages, unreadable, notes = await collect_usages(body, mapping)
+            if not body.get("update_references"):  # ohne Haken: warnen, was danach ins Leere zeigt
+                unhandled, _, _ = await collect_usages({"update_references": True}, mapping)
     targets = await resolve_areas(body, items)
     area_changes = [{"device": it["name"], "from": it.get("current_area") or "", "to": targets[it["device_id"]]["name"],
                      "create": targets[it["device_id"]]["create"]} for it in items if it["device_id"] in targets]
-    return web.json_response({"entities": changes, "skipped": skipped, "usages": usages,
+    return web.json_response({"entities": changes, "skipped": skipped, "usages": usages, "unhandled": unhandled,
                               "unreadable": unreadable, "notes": notes, "areas": area_changes, "entity_info": info})
 
 
@@ -909,8 +987,7 @@ async def verify_changes(items, renamed, opts, wait=True):
     if renamed and wants_refs:
         usages, unreadable, notes = await collect_usages(opts, {c["old"]: c["new"] for c in renamed})
         if usages:
-            checks.append(check("Verweise", "fail", "Alte Entity-IDs kommen noch vor in: " + "; ".join(
-                f"{u['kind']} {u['title']} ({', '.join(u['entities'])})" for u in usages)))
+            checks.append({**check("Verweise", "fail", "Alte Entity-IDs kommen noch vor in: " + usage_text(usages)), "fix": True})
         else:
             parts = [k for k, on in (("Automationen/Skripte/Szenen/Dashboards", opts.get("update_references")),
                                      ("YAML-Dateien", opts.get("update_yaml")), ("Node-RED-Flows", opts.get("update_nodered"))) if on]
@@ -923,8 +1000,29 @@ async def verify_changes(items, renamed, opts, wait=True):
         if opts.get("update_yaml"):
             checks.append(check("YAML", "info", "Dateien sind angepasst. Konfiguration prüfen und neu laden (Entwicklerwerkzeuge → YAML)"))
     elif renamed:
-        checks.append(check("Verweise", "info", "Nicht geprüft/angepasst (Haken aus). Automationen mit alten IDs laufen ins Leere"))
+        usages, _, _ = await collect_usages({"update_references": True}, {c["old"]: c["new"] for c in renamed})
+        if usages:
+            checks.append({**check("Verweise", "warn", "Nicht angepasst (Haken aus) – diese zeigen jetzt ins Leere: " + usage_text(usages)), "fix": True})
+        else:
+            checks.append(check("Verweise", "ok", "Keine alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards (YAML/Node-RED nicht geprüft)"))
     return checks
+
+
+KIND_NAMES = {"automation": "Automation", "script": "Skript", "scene": "Szene", "dashboard": "Dashboard", "yaml": "YAML", "nodered": "Node-RED"}
+
+
+def usage_text(usages):
+    return "; ".join(f"{KIND_NAMES.get(u['kind'], u['kind'])} „{u['title']}“ ({', '.join(u['entities'])})" for u in usages)
+
+
+async def fix_references(request):
+    """„Alte IDs jetzt ersetzen“ nach der Prüfung: ersetzt die übriggebliebenen alten Entity-IDs und prüft erneut."""
+    body = await request.json()
+    renamed = [c for c in body.get("renamed", []) if c.get("old") and c.get("new")]
+    opts = {**body, "update_references": True}
+    changed, _, _, errors = await replace_references(opts, {c["old"]: c["new"] for c in renamed})
+    checks = await verify_changes(parse_request(body), renamed, {**opts, "skip_names": True}, wait=False)
+    return web.json_response({"updated_references": changed, "errors": errors, "checks": checks})
 
 
 async def assign_area(request):
@@ -981,6 +1079,10 @@ async def apply(request):
     prog(pid, "Lese Entitäten …", 0)
     entities = (await ha([{"type": "config/entity_registry/list"}]))[0] if z2m_mode else []
     changes, skipped, _info = entity_changes(items, entities) if z2m_mode else ([], [], [])
+    before = {ekey(e): e["entity_id"] for e in entities}
+    key_of = {e["entity_id"]: ekey(e) for e in entities}
+    batch = {it["device_id"] for it in items}
+    mine = {ekey(e) for e in entities if e.get("device_id") in batch}  # alle Entitäten der umbenannten Geräte
     targets = await resolve_areas(body, items)
     await create_missing_areas(targets, errors)
     for it in items:
@@ -1029,75 +1131,36 @@ async def apply(request):
         prog(pid, "Warte, bis Home Assistant die neuen Namen aus Zigbee2MQTT übernimmt …", 0)
         errors += await adopt_z2m_names(in_z2m, targets)
 
-    renamed = []
     z2m_ok = {i["device_id"] for i in items if i["device_id"] in done and i.get("source") == "z2m" and z2m_on}
     ids_by_entity = {e["entity_id"]: e.get("device_id") for e in entities}
     changes = [c for c in changes if ids_by_entity.get(c["old"]) not in failed_ids]  # nichts ändern, wenn Z2M nicht umbenannt hat
-    # Z2M benennt mit homeassistant_rename die Entity-IDs ggf. selbst um: kurz abwarten, dann nur Fehlendes selbst erledigen
-    fresh = {e["entity_id"] for e in entities}
-    if z2m_ok and changes:
-        prog(pid, "Warte auf Zigbee2MQTT (Entity-IDs) …", 0)
-        for _ in range(4):
-            await asyncio.sleep(1.5)
-            fresh = {e["entity_id"] for e in (await ha([{"type": "config/entity_registry/list"}]))[0]}
-            if all(c["new"] in fresh or ids_by_entity.get(c["old"]) not in z2m_ok for c in changes):
-                break
+    # Z2M benennt mit homeassistant_rename die Entity-IDs selbst um (Löschen, Neuanlegen, Umbenennen in HA) – und nicht
+    # immer genau so wie vorhergesagt. Deshalb abwarten, bis es fertig ist, und nur Übriggebliebenes selbst umbenennen.
+    current = before
+    z2m_keys = {key_of[c["old"]] for c in changes if ids_by_entity.get(c["old"]) in z2m_ok}
+    if z2m_keys:
+        prog(pid, "Warte, bis Zigbee2MQTT die Entity-IDs in Home Assistant umbenannt hat …", 0)
+        current = await wait_z2m_entities(z2m_keys, before, timeout=min(120, 15 + 2 * len(z2m_ok)))
     for ch in changes:
         prog(pid, f"Entity-ID: {ch['old']}")
-        if ch["new"] in fresh and ch["old"] not in fresh:
-            renamed.append(ch)  # hat Zigbee2MQTT bereits umbenannt
-            continue
+        now = current.get(key_of[ch["old"]])
+        if now and now != ch["old"]:
+            continue  # hat Zigbee2MQTT schon umbenannt
         ok, res = await ha_try({"type": "config/entity_registry/update",
-                                "entity_id": ch["old"], "new_entity_id": ch["new"]})
-        (renamed.append(ch) if ok else errors.append({"device": ch["old"], "error": res}))
+                                "entity_id": now or ch["old"], "new_entity_id": ch["new"]})
+        if not ok:
+            errors.append({"device": ch["old"], "error": res})
+    # Maßgeblich für Verweise und Prüfung ist, was HA jetzt wirklich hat – alt → neu über die eindeutige ID der Entität
+    renamed = []
+    if z2m_mode and mine:
+        after = await entity_ids_by_key()
+        renamed = sorted(({"old": before[k], "new": after[k]} for k in mine if k in after and after[k] != before[k]), key=lambda c: c["old"])
 
-    changed_refs, unreadable = [], 0
-    notes = []
+    changed_refs, unreadable, notes = [], 0, []
     prog(pid, "Suche Verweise …", 0)
     if renamed and (body.get("update_references") or body.get("update_yaml") or body.get("update_nodered")):
-        configs, unreadable = await scan_configs() if body.get("update_references") else ([], 0)
-        if body.get("update_yaml") or body.get("update_nodered"):
-            files, notes = scan_files(body.get("update_yaml"), body.get("update_nodered"),
-                                      skip_ui_yaml=bool(body.get("update_references")))
-            configs += files
-        mapping = {c["old"]: c["new"] for c in renamed}
-        rx = mapping_regex(mapping)
-        backup = DATA / "backups" / time.strftime("%Y%m%d-%H%M%S")
-        async with ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as http:
-            for it in configs:
-                text = item_text(it)
-                if not rx.search(text):
-                    continue
-                backup.mkdir(parents=True, exist_ok=True)
-                label = it["title"] if it["kind"] in ("yaml", "nodered") else str(it["id"])
-                (backup / f"{it['kind']}__{slugify(label) or 'default'}.bak").write_text(text)
-                new_text = rx.sub(lambda m: mapping[m.group(1)], text)
-                if it["kind"] in ("yaml", "nodered"):
-                    try:
-                        if it["kind"] == "nodered":
-                            json.loads(new_text)  # nur schreiben, wenn das Ergebnis gültiges JSON bleibt
-                        it["path"].write_text(new_text, encoding="utf-8")
-                        ok, res = True, ""
-                    except (OSError, ValueError) as err:
-                        ok, res = False, str(err)
-                    if ok:
-                        changed_refs.append({"kind": it["kind"], "title": it["title"]})
-                    else:
-                        errors.append({"device": f"{it['kind']} {it['title']}", "error": res})
-                    continue
-                new_cfg = json.loads(new_text)
-                if it["kind"] == "dashboard":
-                    cmd = {"type": "lovelace/config/save", "config": new_cfg}
-                    if it["url_path"]:
-                        cmd["url_path"] = it["url_path"]
-                    ok, res = await ha_try(cmd)
-                else:
-                    async with http.post(f"{CORE_API}/{it['path']}", json=new_cfg) as r:
-                        ok, res = r.status == 200, await r.text()
-                if ok:
-                    changed_refs.append({"kind": it["kind"], "title": it["title"]})
-                else:
-                    errors.append({"device": f"{it['kind']} {it['title']}", "error": res})
+        changed_refs, unreadable, notes, ref_errors = await replace_references(body, {c["old"]: c["new"] for c in renamed})
+        errors += ref_errors
     prog(pid, "Prüfe das Ergebnis …", 0)
     checks = await verify_changes([i for i in items if i["device_id"] not in failed_ids], renamed, body) if not body.get("skip_verify") else []
     prog_end(pid)
@@ -1166,6 +1229,7 @@ def make_app():
         web.post("/api/plan", plan),
         web.post("/api/apply", apply),
         web.post("/api/verify", verify),
+        web.post("/api/fix_references", fix_references),
         web.get("/api/progress", progress),
         web.get("/api/z2m_bases", z2m_bases),
         web.post("/api/assign_area", assign_area),
