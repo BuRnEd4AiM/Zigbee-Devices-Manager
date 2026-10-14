@@ -1,5 +1,25 @@
 # Änderungen
 
+## 0.9.0
+
+*14.10.2026*
+
+- **Neuer Reiter „Netzwerk“:** zeigt das Zigbee-Netz jeder Zigbee2MQTT-Instanz als aufklappbaren Baum – wer hängt an wem und wie gut ist die Verbindung (LQI, farbig, beide Richtungen).
+- Router hängen am besten Weg zum Koordinator (die schwächste Verbindung auf dem Weg ist so stark wie möglich), Endgeräte an ihrem Parent. Je Gerät aufklappbar: andere Router in Reichweite.
+- Geräte ohne Verbindung im Scan stehen gesammelt unter „Nicht verbunden“.
+- Suche, Filter „Schwache Verbindungen“ und Gerätetyp, „Alles auf/zu“, LQI-Grenzen einstellbar (Standard 30/80/150).
+- Klick auf ein Gerät: Typ, IEEE, Parent, Weg zum Koordinator, alle Nachbarn mit LQI, zuletzt gesehen, „ⓘ Z2M“ und „⌂ HA“.
+- „Scan starten“ fragt Zigbee2MQTT nach der Netzwerkkarte (nur auf Knopfdruck, dauert meist 10–60 s). Der letzte Scan wird gespeichert; ein vorhandener Networkmap-Sensor in HA wird mitgenutzt.
+- Kopfzeile bricht auf dem Handy jetzt um, statt seitlich zu scrollen.
+
+## 0.8.1
+
+*14.10.2026*
+
+- **Fix: Verweise in Dashboards und Automationen gingen beim Umbenennen über Zigbee2MQTT teilweise verloren.** Z2M löscht die Entitäten in HA, legt sie neu an und benennt sie um – nicht immer genau so wie vorhergesagt, und bei vielen Geräten dauerte das länger, als das Add-on wartete. Jetzt wartet es, bis Z2M fertig ist, und ersetzt die Verweise mit den Entity-IDs, die HA tatsächlich hat (über die eindeutige ID jeder Entität).
+- Die Vorschau warnt, wenn Automationen/Dashboards die alten Entity-IDs nutzen, aber „Verweise anpassen“ aus ist – mit Haken zum direkten Mitanpassen.
+- Die Prüfung nach dem Umbenennen sucht auch ohne Haken nach alten Entity-IDs; „Alte IDs jetzt ersetzen“ repariert sie mit einem Klick.
+
 ## 0.8.0
 
 *11.10.2026*

@@ -37,6 +37,7 @@ German version: [README.md](README.md)
 - Planned devices reserve names/numbers
 - Rename entity IDs along with the device (default: on, can be unticked)
 - CSV/JSON export, scheme export/import
+- **"Netzwerk" tab (Zigbee2MQTT):** the network as a collapsible tree – who hangs on whom and how good the link is (LQI badges green ≥ 150, yellow 80–149, orange 30–79, red < 30; thresholds adjustable; both values when the directions differ). Routers hang on the best path to the coordinator (the weakest link on the path as strong as possible; ties: fewer hops), end devices on their parent; per device the other routers in range can be expanded. Devices without a link are grouped under "Nicht verbunden". Search, filters for weak links and device type, expand/collapse all, instance switcher, details on click (parent, path, all neighbours with LQI, last seen, "ⓘ Z2M"/"⌂ HA"). "Scan starten" asks Z2M for the network map (`bridge/request/networkmap`, raw) – only on demand; the last scan is kept and an existing networkmap sensor in HA is used too. LQI 0 counts as "no current reading" when the other direction has a value. Tests: `node --test test/zigbee-tree.test.mjs`.
 - **Jump straight to a device:** in the device list, "ⓘ Z2M" opens the device's info page in the Zigbee2MQTT UI (MQTT topic, exposes, settings) and "⌂ HA" opens the device page in Home Assistant (entities, area, MQTT info). The add-on finds the Z2M UI itself (Zigbee2MQTT add-on via ingress, or `frontend.url` from Z2M); with several instances pick it in the "Gateways" tab under "Z2M-Oberfläche" or enter an address such as `http://192.168.1.10:8080`.
 - **Automatic backups:** naming scheme, assignments, planned devices, gateways and the device list from HA are backed up – after changes at most hourly, daily, before every rename/area assignment and before every restore (unchanged states are not duplicated, the last 60 are kept). Location: `/config/zigbee_devices_manager/backups` – survives reinstalling the add-on and is part of every HA backup. If the settings are missing at start, the add-on restores the latest state by itself. "Export" tab: list of backups, "Jetzt sichern" (back up now), restore, download as JSON or the device list as CSV, restore from a file.
 
@@ -58,7 +59,8 @@ a browser. Rebuild with `python3 scripts/build_demo.py` (also available as a Git
   per gateway or in the add-on options: `z2m_base_topic`); Home Assistant takes the name from Z2M. ZHA devices (or Z2M with the
   box unticked) are renamed in the Home Assistant device registry (`name_by_user`).
 - **Rename entity IDs:** shows a preview of the new entity IDs first.
-- **Update references:** replaces the old entity IDs in automations, scripts, scenes and dashboards managed via the UI.
+- **Update references:** uses the entity IDs Home Assistant actually has after renaming (also when Zigbee2MQTT renames them itself). With the box unticked, the preview warns if automations/dashboards use the old IDs; after renaming, "Alte IDs jetzt ersetzen" fixes leftovers.
+  Replaces the old entity IDs in automations, scripts, scenes and dashboards managed via the UI.
   Preview first, old configs are backed up to `/data/backups/`. Optionally also **YAML files** under `/config` (packages, `configuration.yaml`, YAML dashboards …; plain text replacement
   with word boundaries, comments are kept) and **Node-RED flows** (`flows.json` of the Node-RED add-on). Check/reload the config
   after YAML changes and restart Node-RED afterwards. The add-on mounts `/config` and `/addon_configs` for this.

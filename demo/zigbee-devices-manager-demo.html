@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Zigbee Devices Manager</title>
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--fg:#1d2330;--muted:#6b7385;--line:#e2e5ec;--accent:#0b7bd6;--accent-fg:#fff;--ok:#1a8f4c;--warn:#b86e00;--new:#c2410c;--chip:#eef2f8;--input:#fff}
-@media(prefers-color-scheme:dark){:root{--bg:#14171d;--card:#1c2028;--fg:#e6e9ef;--muted:#8d95a8;--line:#2d3340;--accent:#4aa3f0;--accent-fg:#06131f;--ok:#4cc27e;--warn:#e0a040;--new:#f08a4b;--chip:#262c38;--input:#14171d}}
+:root{--bg:#f5f6f8;--card:#fff;--fg:#1d2330;--muted:#6b7385;--line:#e2e5ec;--accent:#0b7bd6;--accent-fg:#fff;--ok:#1a8f4c;--warn:#b86e00;--new:#c2410c;--chip:#eef2f8;--input:#fff;--q-good:#1a8f4c;--q-ok:#9a7b00;--q-weak:#d0650d;--q-bad:#c62828}
+@media(prefers-color-scheme:dark){:root{--bg:#14171d;--card:#1c2028;--fg:#e6e9ef;--muted:#8d95a8;--line:#2d3340;--accent:#4aa3f0;--accent-fg:#06131f;--ok:#4cc27e;--warn:#e0a040;--new:#f08a4b;--chip:#262c38;--input:#14171d;--q-good:#4cc27e;--q-ok:#e2c044;--q-weak:#f0904b;--q-bad:#f26d6d}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 16px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
@@ -59,11 +59,36 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 .lnk{display:inline-block;font-size:12px;padding:2px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);text-decoration:none;white-space:nowrap;cursor:pointer}
 .lnk:hover{border-color:var(--accent);color:var(--accent)}
 .lnk.off{opacity:.45}
+/* Reiter „Netzwerk“ */
+.netwrap{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;align-items:start}
+.nettree{padding:6px 4px;max-height:calc(100vh - 210px);overflow:auto}
+.netdetail{position:sticky;top:72px;max-height:calc(100vh - 210px);overflow:auto}
+@media(max-width:950px){.netwrap{grid-template-columns:1fr}.nettree,.netdetail{max-height:none;position:static}}
+.tn{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:6px;cursor:pointer;min-width:0}
+.tn:hover{background:var(--chip)}.tn.sel{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.tn .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tn.router .nm,.tn.coord .nm{font-weight:600}
+.tw{width:18px;flex:none;text-align:center;color:var(--muted);border:0;background:none;cursor:pointer;padding:0;font-size:12px}
+.tsub{margin-left:14px;padding-left:8px;border-left:1px dashed var(--line)}
+.ty{flex:none;font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;background:var(--chip);color:var(--muted);letter-spacing:.02em}
+.ty.coord{background:var(--accent);color:var(--accent-fg)}.ty.router{color:var(--fg)}
+.q{flex:none;font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px;white-space:nowrap;font-variant-numeric:tabular-nums;border:1px solid currentColor}
+.q.good{color:var(--q-good)}.q.ok{color:var(--q-ok)}.q.weak{color:var(--q-weak)}.q.bad{color:var(--q-bad)}.q.none{color:var(--muted)}
+.alt{flex:none;font-size:11px;color:var(--muted);border:0;background:none;cursor:pointer;padding:0 2px}
+.alt:hover{color:var(--accent)}
+.altlist{margin:0 0 4px 30px;padding:4px 8px;border-left:2px solid var(--chip);font-size:12px;color:var(--muted)}
+.altlist div{display:flex;gap:6px;align-items:center;padding:1px 0}
+.grp{display:flex;align-items:center;gap:6px;padding:8px 6px 4px;font-weight:600;color:var(--muted);cursor:pointer}
+.kv{display:grid;grid-template-columns:120px minmax(0,1fr);gap:4px 10px;font-size:13px;margin:8px 0}
+.kv span:nth-child(odd){color:var(--muted)}
+.nbt td{padding:4px 6px;font-size:12px}.nbt tr{cursor:pointer}.nbt tr:hover td{background:var(--chip)}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;vertical-align:-2px}
+@keyframes spin{to{transform:rotate(360deg)}}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s}
 .toast.show{opacity:1}
 @media(max-width:1250px){.hide-m{display:none}}
 @media(max-width:1050px){.hide-l{display:none}}
 @media(max-width:700px){.hide-s{display:none}}
+@media(max-width:600px){nav{margin-left:0;flex-wrap:wrap}nav button{padding:6px 9px}}
 </style>
 </head>
 <body>
@@ -72,6 +97,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
   <nav>
     <button data-tab="devices" class="on">Geräte</button>
     <button data-tab="gateways">Gateways</button>
+    <button data-tab="network">Netzwerk</button>
     <button data-tab="scheme">Namensschema</button>
     <button data-tab="export">Export</button>
   </nav>
@@ -80,11 +106,238 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
   <div id="banner"></div>
   <section id="tab-devices"></section>
   <section id="tab-gateways" hidden></section>
+  <section id="tab-network" hidden></section>
   <section id="tab-scheme" hidden></section>
   <section id="tab-export" hidden></section>
 </main>
 <div class="toast" id="toast"></div>
 
+<script>
+/* Zigbee-Netz als Baum: liest die raw-Networkmap von Zigbee2MQTT und berechnet, wer an wem hängt.
+ * Ohne DOM – läuft im Browser (globalThis.ZigbeeTree) und in Node (require) für die Tests.
+ *
+ * Das raw-Format (Zigbee2MQTT lib/extension/networkMap.ts):
+ *  - nodes[]: ieeeAddr, friendlyName, type (Coordinator/Router/EndDevice), networkAddress, lastSeen (ms), failed (z. B. ["lqi"]),
+ *    definition {model, vendor, description}, manufacturerName, modelID.
+ *  - links[]: ein Eintrag aus der Nachbartabelle von `target` über den Nachbarn `source`.
+ *    lqi/linkquality = wie gut target den Nachbarn empfängt; relationship = Rolle von source aus Sicht von target
+ *    (0 = Parent, 1 = Kind, 2 = Geschwister, 3 = keine, 4 = früheres Kind); depth = Tiefe von source.
+ *    Abgefragt werden nur Koordinator und Router – Endgeräte erscheinen nur in der Tabelle ihres Parents.
+ *    A→B und B→A kommen getrennt (eigener LQI je Richtung) und werden hier zu einem Paar zusammengefasst.
+ *
+ * Echte Scans (siehe test/fixtures): LQI 0 bedeutet in vielen Tabellen „kein aktueller Messwert“ (z. B. Tuya-Steckdosen,
+ * Koordinator über manche Router), obwohl die Gegenrichtung gut ist. depth ist oft 255 oder 15 = unbekannt.
+ *
+ * Baum (build):
+ *  1. Router-Pfade: „breitester Pfad“ vom Koordinator über Koordinator/Router. Gewicht einer Verbindung ist der
+ *     schwächere der beiden LQI-Werte; eine 0 zählt nur, wenn es keinen anderen Wert gibt (nur eine Richtung bekannt:
+ *     dieser Wert). Gesucht ist der Pfad, dessen schwächste
+ *     Verbindung am stärksten ist (Dijkstra-Variante: offener Knoten mit dem besten Label zuerst). Gleichstand:
+ *     weniger Sprünge, dann geringere depth des Parents, dann kleinere IEEE (immer dasselbe Ergebnis).
+ *  2. Endgeräte (und Geräte unbekannten Typs) hängen an dem Router/Koordinator, der sie als Kind führt
+ *     (relationship 1); mehrere: höchster LQI. Ohne Kind-Eintrag: stärkster Router-Nachbar, als „vermutet“ markiert.
+ *  3. Nicht erreichbare Router (mit ihren Kindern) und Geräte ohne Verbindung bilden die Gruppe „Nicht verbunden“.
+ */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  else root.ZigbeeTree = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  "use strict";
+
+  const ZERO = "0x0000000000000000";
+  const ROLE = {0: "parent", 1: "child", 2: "sibling", 3: "none"};
+  const INVERSE = {parent: "child", child: "parent", sibling: "sibling", none: "none"};
+  const TYPE_ORDER = {Coordinator: 0, Router: 1, EndDevice: 2, Unknown: 3};
+
+  const ieeeOf = v => (typeof v === "string" ? v : (v && v.ieeeAddr) || "").toLowerCase();
+  const num = v => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+
+  function normType(t) {
+    const s = String(t || "").toLowerCase().replace(/[^a-z]/g, "");
+    return s === "coordinator" ? "Coordinator" : s === "router" ? "Router" : s === "enddevice" ? "EndDevice" : "Unknown";
+  }
+  function toTime(v) {
+    if (v === null || v === undefined || v === "") return null;
+    const t = typeof v === "number" ? v : Date.parse(v);
+    return Number.isFinite(t) ? t : null;
+  }
+
+  /** Findet {nodes, links} in einer Z2M-Antwort ({data: {value}}), im value selbst, in HA-Attributen oder als JSON-Text. */
+  function unwrap(raw) {
+    let v = typeof raw === "string" ? JSON.parse(raw) : raw;
+    for (let i = 0; i < 4 && v && !Array.isArray(v.nodes); i++) v = v.data ?? v.value ?? v.attributes;
+    if (!v || !Array.isArray(v.nodes)) throw new Error("Keine Networkmap gefunden (nodes/links fehlen)");
+    return v;
+  }
+
+  function placeholder(ieee, deviceType, nwk) {
+    return {ieee, name: ieee, type: deviceType === 1 ? "Router" : deviceType === 2 ? "EndDevice" : "Unknown", nwk: num(nwk),
+      lastSeen: null, failed: [], model: "", vendor: "", description: "", placeholder: true};
+  }
+
+  /** Liest die raw-Networkmap: Geräte nach IEEE und Verbindungs-Paare mit den Werten beider Richtungen. */
+  function parse(raw) {
+    const v = unwrap(raw);
+    const nodes = new Map();
+    for (const n of v.nodes) {
+      const ieee = ieeeOf(n.ieeeAddr);
+      if (!ieee) continue;
+      const def = n.definition || {};
+      nodes.set(ieee, {ieee, name: n.friendlyName || n.friendly_name || ieee, type: normType(n.type), nwk: num(n.networkAddress),
+        lastSeen: toTime(n.lastSeen), failed: Array.isArray(n.failed) ? n.failed : [], model: def.model || n.modelID || "",
+        vendor: def.vendor || n.manufacturerName || "", description: def.description || "", placeholder: false});
+    }
+    const byNwk = new Map();
+    for (const n of nodes.values()) if (n.nwk !== null) byNwk.set(n.nwk, n.ieee);
+
+    const pairs = new Map();
+    let skipped = 0;
+    for (const l of v.links || []) {
+      const srcNwk = num(l.source && l.source.networkAddress) ?? num(l.sourceNwkAddr);
+      let src = ieeeOf(l.source) || ieeeOf(l.sourceIeeeAddr);
+      if ((!src || src === ZERO) && srcNwk !== null && byNwk.has(srcNwk)) src = byNwk.get(srcNwk); // manche Xiaomi melden 0x00…
+      const tgt = ieeeOf(l.target) || ieeeOf(l.targetIeeeAddr);
+      const rel = num(l.relationship);
+      const lqi = num(l.lqi ?? l.linkquality);
+      if (!src || !tgt || src === ZERO || src === tgt || lqi === null || (rel !== null && rel > 3)) { skipped++; continue; }
+      if (!nodes.has(src)) nodes.set(src, placeholder(src, num(l.deviceType), srcNwk));
+      if (!nodes.has(tgt)) nodes.set(tgt, placeholder(tgt, null, l.target && l.target.networkAddress));
+      const [a, b] = src < tgt ? [src, tgt] : [tgt, src];
+      const key = a + "|" + b;
+      const p = pairs.get(key) || {a, b, seen: {}};
+      const prev = p.seen[tgt]; // Eintrag in der Tabelle von tgt über src
+      const depth = num(l.depth);
+      if (!prev || lqi > prev.lqi) p.seen[tgt] = {lqi, role: ROLE[rel ?? 3] || "none", depth: depth !== null && depth < 15 ? depth : null};
+      pairs.set(key, p);
+    }
+    return {nodes, pairs: [...pairs.values()], skipped};
+  }
+
+  /** Nachbar-Sicht für `me`: wie gut me den anderen hört (lqiIn), wie gut der andere me hört (lqiOut), Rolle des anderen. */
+  function neighborOf(p, me) {
+    const other = p.a === me ? p.b : p.a;
+    const mine = p.seen[me], theirs = p.seen[other];
+    const role = mine ? mine.role : theirs ? INVERSE[theirs.role] : "none";
+    const measured = [mine && mine.lqi, theirs && theirs.lqi].filter(x => x > 0); // 0 = kein Messwert, wenn es einen anderen gibt
+    return {ieee: other, lqiIn: mine ? mine.lqi : null, lqiOut: theirs ? theirs.lqi : null, lqi: measured.length ? Math.min(...measured) : 0, role};
+  }
+
+  const isRouting = n => !!n && !n.placeholder && (n.type === "Coordinator" || n.type === "Router");
+  const cmpStr = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+
+  /** Baut den Baum. Liefert {coordinator, unconnected, all, stats}. */
+  function build(raw) {
+    const {nodes, pairs, skipped} = parse(raw);
+    const nb = new Map([...nodes.keys()].map(k => [k, []]));
+    const depth = new Map();
+    for (const p of pairs) {
+      nb.get(p.a).push(neighborOf(p, p.a));
+      nb.get(p.b).push(neighborOf(p, p.b));
+      for (const [owner, other] of [[p.a, p.b], [p.b, p.a]]) { // depth gehört zum Nachbarn (source)
+        const e = p.seen[owner];
+        if (e && e.depth !== null) depth.set(other, Math.min(depth.has(other) ? depth.get(other) : Infinity, e.depth));
+      }
+    }
+    const coord = [...nodes.values()].find(n => n.type === "Coordinator" && !n.placeholder) || null;
+    if (coord) depth.set(coord.ieee, 0);
+    const depthOf = k => (depth.has(k) ? depth.get(k) : Infinity);
+
+    // 1. Breitester Pfad vom Koordinator über Router
+    const label = new Map();
+    // a besser als b? Erst stärkste schwächste Verbindung, dann weniger Sprünge, dann flacherer Parent, dann IEEE
+    const better = (a, b) => a.b !== b.b ? a.b > b.b : a.hops !== b.hops ? a.hops < b.hops
+      : depthOf(a.parent) !== depthOf(b.parent) ? depthOf(a.parent) < depthOf(b.parent) : cmpStr(a.parent, b.parent) < 0;
+    if (coord) {
+      label.set(coord.ieee, {b: Infinity, hops: 0, parent: null, link: null});
+      const open = new Set([coord.ieee]), done = new Set();
+      while (open.size) {
+        let cur = null;
+        for (const k of open) {
+          const lk = label.get(k), lc = cur && label.get(cur);
+          if (!cur || lk.b > lc.b || (lk.b === lc.b && (lk.hops < lc.hops || (lk.hops === lc.hops && cmpStr(k, cur) < 0)))) cur = k;
+        }
+        open.delete(cur);
+        done.add(cur);
+        const lc = label.get(cur);
+        for (const e of nb.get(cur)) {
+          if (done.has(e.ieee) || !isRouting(nodes.get(e.ieee))) continue;
+          const cand = {b: Math.min(lc.b, e.lqi), hops: lc.hops + 1, parent: cur, link: e};
+          const old = label.get(e.ieee);
+          if (!old || better(cand, old)) { label.set(e.ieee, cand); open.add(e.ieee); }
+        }
+      }
+    }
+
+    // Baumknoten
+    const all = new Map();
+    for (const n of nodes.values()) {
+      const neighbors = nb.get(n.ieee).slice().sort((x, y) => y.lqi - x.lqi || cmpStr(x.ieee, y.ieee));
+      all.set(n.ieee, {ieee: n.ieee, node: n, parent: null, link: null, bottleneck: null, hops: null, guessed: false, children: [], neighbors, descendants: 0});
+    }
+    // Verbindung aus Sicht des Kindes zum Parent: lqiIn = Kind hört Parent, lqiOut = Parent hört Kind
+    const attach = (child, parent, guessed) => {
+      const t = all.get(child), pt = all.get(parent);
+      t.parent = parent;
+      t.link = t.neighbors.find(e => e.ieee === parent) || null;
+      t.guessed = guessed;
+      pt.children.push(t);
+    };
+    for (const [k, l] of label) if (l.parent) attach(k, l.parent, false);
+
+    // 2. Endgeräte und Geräte unbekannten Typs
+    for (const n of nodes.values()) {
+      if (isRouting(n)) continue;
+      const routers = all.get(n.ieee).neighbors.filter(e => isRouting(nodes.get(e.ieee)));
+      const reach = e => (label.has(e.ieee) ? label.get(e.ieee).b : -1);
+      const pick = list => list.slice().sort((x, y) => y.lqi - x.lqi || reach(y) - reach(x) || cmpStr(x.ieee, y.ieee))[0];
+      const parents = routers.filter(e => e.role === "parent");
+      if (parents.length) attach(n.ieee, pick(parents).ieee, false);
+      else if (routers.length) attach(n.ieee, pick(routers).ieee, true);
+    }
+
+    // Pfadwerte, Sortierung, Zählung (von oben nach unten)
+    const sortKids = t => t.children.sort((x, y) => (TYPE_ORDER[x.node.type] - TYPE_ORDER[y.node.type]) || x.node.name.localeCompare(y.node.name, "de"));
+    const walk = (t, hops, b) => {
+      t.hops = hops;
+      t.bottleneck = b;
+      sortKids(t);
+      t.descendants = 0;
+      for (const c of t.children) {
+        walk(c, hops === null ? null : hops + 1, b === null || !c.link ? null : Math.min(b, c.link.lqi));
+        t.descendants += 1 + c.descendants;
+      }
+    };
+    const coordinator = coord ? all.get(coord.ieee) : null;
+    if (coordinator) walk(coordinator, 0, Infinity);
+    const unconnected = [...all.values()].filter(t => t !== coordinator && !t.parent)
+      .sort((x, y) => (TYPE_ORDER[x.node.type] - TYPE_ORDER[y.node.type]) || x.node.name.localeCompare(y.node.name, "de"));
+    for (const t of unconnected) walk(t, null, null);
+
+    const list = [...nodes.values()];
+    return {coordinator, unconnected, all, stats: {
+      devices: list.filter(n => !n.placeholder).length, routers: list.filter(n => n.type === "Router" && !n.placeholder).length,
+      endDevices: list.filter(n => n.type === "EndDevice" && !n.placeholder).length, links: pairs.length,
+      unconnected: unconnected.reduce((s, t) => s + 1 + t.descendants, 0), skipped}};
+  }
+
+  /** Farbklasse für einen LQI-Wert: bad < t0 ≤ weak < t1 ≤ ok < t2 ≤ good (Standard 30/80/150). */
+  function lqiClass(lqi, thresholds) {
+    const [t0, t1, t2] = thresholds && thresholds.length === 3 ? thresholds : [30, 80, 150];
+    if (lqi === null || lqi === undefined || !Number.isFinite(lqi)) return "none";
+    return lqi < t0 ? "bad" : lqi < t1 ? "weak" : lqi < t2 ? "ok" : "good";
+  }
+
+  /** Weg vom Koordinator (bzw. der obersten Stelle) bis zum Gerät, als Liste von IEEE-Adressen. */
+  function pathTo(tree, ieee) {
+    const out = [];
+    for (let t = tree.all.get(ieee), guard = 0; t && guard < 1000; t = t.parent ? tree.all.get(t.parent) : null, guard++) out.unshift(t.ieee);
+    return out;
+  }
+
+  return {parse, build, lqiClass, pathTo, unwrap};
+});
+</script>
 <script>window.ZDM_DEMO = true;</script>
 <script>
 // ---------- Konfiguration / Standarddaten ----------
@@ -219,7 +472,8 @@ const api = {
       if (o.update_yaml) usages.push({kind: "yaml", title: "packages/licht.yaml", entities: [entities[0].old]});
       if (o.update_nodered) usages.push({kind: "nodered", title: "a0d7b954_nodered/flows.json", entities: entities.map(e => e.old)});
       const areas = !o.set_area ? [] : this.payload(list).filter(i => i.area_name && i.area_name !== i.current_area).map(i => ({device: i.name, from: i.current_area, to: i.area_name, create: !i.area_id}));
-      return {entities, skipped: [], usages, unreadable: 0, notes: [], areas};
+      const unhandled = o.update_references ? [] : [{kind: "dashboard", title: "Übersicht", entities: entities.map(e => e.old)}];
+      return {entities, skipped: [], usages, unhandled, unreadable: 0, notes: [], areas};
     }
     return this.post("api/plan", {items: this.payload(list), ...this.opts()});
   },
@@ -259,6 +513,11 @@ const api = {
     if (this.demo) return {checks: this.demoChecks(last)};
     return this.post("api/verify", {items: last.items, renamed: last.renamed, ...last.opts});
   },
+  /** Ersetzt nach der Prüfung übriggebliebene alte Entity-IDs in Automationen/Dashboards (und YAML/Node-RED, falls angehakt). */
+  async fixReferences(last) {
+    if (this.demo) return {updated_references: [{kind: "dashboard", title: "Übersicht"}], errors: [], checks: [{name: "Verweise", status: "ok", detail: "Beispiel: keine alten Entity-IDs mehr gefunden"}]};
+    return this.post("api/fix_references", {items: last.items, renamed: last.renamed, ...last.opts});
+  },
   async z2mUis() {
     if (this.demo) return DEMO_UIS;
     const r = await fetch("api/z2m_uis"); return r.ok ? r.json() : [];
@@ -295,6 +554,7 @@ const api = {
     if (o.rename_z2m) c.push({name: "Zigbee2MQTT", status: "ok", detail: last.items.length + " Gerät(e) heißen auch in Zigbee2MQTT wie geplant"});
     if (o.rename_entities) c.push({name: "Entity-IDs", status: "ok", detail: "Beispiel: alte IDs gibt es nicht mehr"});
     if (o.update_references || o.update_yaml || o.update_nodered) c.push({name: "Verweise", status: "ok", detail: "Beispiel: keine alten Entity-IDs mehr gefunden"});
+    else if (o.rename_entities) c.push({name: "Verweise", status: "warn", fix: true, detail: "Nicht angepasst (Haken aus) – diese zeigen jetzt ins Leere: Dashboard „Übersicht“ (Beispiel)"});
     if (o.update_nodered) c.push({name: "Node-RED", status: "info", detail: "Node-RED jetzt neu starten"});
     if (o.set_area) c.push({name: "Bereiche (Räume)", status: "ok", detail: "Beispiel: Geräte sind dem gewählten Bereich zugeordnet"});
     return c;
@@ -306,7 +566,7 @@ const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], fi
 /** Haken beim Umbenennen – werden im Store gemerkt. */
 const OPTION_KEYS = ["setArea", "renameZ2m", "renameEntities", "updateRefs", "updateYaml", "updateNodered"];
 
-const storeData = () => ({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways, options: Object.fromEntries(OPTION_KEYS.map(k => [k, S[k]]))});
+const storeData = () => ({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways, options: Object.fromEntries(OPTION_KEYS.map(k => [k, S[k]])), network: S.network});
 function persist() {
   // Konnten die gespeicherten Einstellungen nicht geladen werden (HA nicht erreichbar), würde Speichern sie mit Standardwerten überschreiben
   if (!S.storeLoaded) return;
@@ -707,10 +967,15 @@ function confirmPlan(plan, count, areaOnly = false) {
       ${S.updateNodered ? `<p class="sub">Node-RED danach neu starten, sonst überschreibt ein Deploy die Änderung.</p>` : ""}
       ${S.updateYaml ? `<p class="sub">YAML geändert: danach Konfiguration prüfen und neu laden.</p>` : ""}
       <p class="sub">Vorher wird eine Sicherung der geänderten Konfigurationen unter /data/backups abgelegt.</p>` : ""}
+      ${!areaOnly && S.renameEntities && !S.updateRefs && (plan.unhandled || []).length ? `<div class="banner" style="border-left-color:var(--new);margin:12px 0 0;color:var(--fg)">
+        <b>⚠ ${plan.unhandled.length} Automation(en)/Dashboard(s) verwenden diese Entity-IDs</b> und zeigen danach ins Leere, wenn sie nicht angepasst werden:
+        <div class="sub" style="max-height:90px;overflow:auto;margin:4px 0">${plan.unhandled.map(u => `${kinds[u.kind] || u.kind}: <b>${esc(u.title)}</b> (${u.entities.length})`).join("<br>")}</div>
+        <label><input type="checkbox" id="fixRefs" checked> Verweise in Automationen, Skripten, Szenen und Dashboards mit anpassen (vorher gesichert)</label></div>` : ""}
       <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="no">Abbrechen</button><button class="btn primary" id="yes">${areaOnly ? "Zuweisen" : "Umbenennen"}</button></div>`;
     document.body.appendChild(dlg); dlg.showModal();
     const end = v => { dlg.close(); dlg.remove(); resolve(v); };
-    $("#no", dlg).onclick = () => end(false); $("#yes", dlg).onclick = () => end(true);
+    $("#no", dlg).onclick = () => end(false);
+    $("#yes", dlg).onclick = () => { if ($("#fixRefs", dlg)?.checked) { S.updateRefs = true; persist(); } end(true); };
     dlg.oncancel = () => end(false);
   });
 }
@@ -802,8 +1067,17 @@ function showChecks(checks, last, errors) {
       dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${bad ? "❌ Prüfung: nicht alles hat geklappt" : warn ? "⚠️ Prüfung: bitte nachsehen" : "✅ Prüfung: alles wurde angepasst"}</h2>
         <div class="preview" style="line-height:1.6">${list.map(c => `${icon[c.status] || "•"} <b>${esc(c.name)}</b><div class="sub" style="margin:0 0 6px 24px">${esc(c.detail)}</div>`).join("") || "Keine Prüfung verfügbar."}
         ${errors.map(e => `❌ <b>${esc(e.device)}</b><div class="sub" style="margin:0 0 6px 24px">${esc(e.error)}</div>`).join("")}</div>
-        <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="re">Erneut prüfen</button><button class="btn primary" id="ok">Schließen</button></div>`;
+        <div class="row" style="justify-content:flex-end;margin:16px 0 0">${list.some(c => c.fix) ? `<button class="btn" id="fix" title="Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards durch die neuen (vorher gesichert)">Alte IDs jetzt ersetzen</button>` : ""}<button class="btn" id="re">Erneut prüfen</button><button class="btn primary" id="ok">Schließen</button></div>`;
       $("#ok", dlg).onclick = () => { dlg.close(); dlg.remove(); resolve(); };
+      $("#fix", dlg) && ($("#fix", dlg).onclick = async () => {
+        $("#fix", dlg).disabled = true; $("#fix", dlg).textContent = "Ersetze …";
+        try {
+          const r = await api.fixReferences(last), names = new Set(r.checks.map(c => c.name));
+          errors = r.errors || [];
+          toast(r.updated_references.length + " Automation(en)/Dashboard(s) angepasst");
+          draw([...list.filter(c => !names.has(c.name)), ...r.checks]); // nur die neu geprüften Punkte ersetzen
+        } catch (e) { toast("Ersetzen fehlgeschlagen: " + e.message); draw(list); }
+      });
       $("#re", dlg).onclick = async () => {
         $("#re", dlg).disabled = true; $("#re", dlg).textContent = "Prüfe…";
         try { draw((await api.verify(last)).checks); } catch (e) { toast("Prüfung fehlgeschlagen: " + e.message); draw(list); }
@@ -883,6 +1157,262 @@ function tickPermit() {
   });
 }
 setInterval(tickPermit, 1000); setInterval(pollPermit, 6000);
+
+// ---------- Netzwerk-Tab ----------
+/* Zeigt das Zigbee-Netz einer Zigbee2MQTT-Instanz als Baum (Logik in zigbee-tree.js): wer hängt an wem, wie gut ist die
+   Verbindung (LQI). Ein neuer Scan läuft nur auf Knopfdruck; angezeigt wird der letzte Scan (oder ein vorhandener Sensor). */
+const NET = {inst: "", data: {}, trees: {}, sel: "", collapsed: new Set(), alt: new Set(), q: "", weak: false, type: "", poll: {}};
+const NET_TYPES = {Coordinator: ["KO", "Koordinator", "coord"], Router: ["R", "Router", "router"], EndDevice: ["E", "Endgerät", "end"], Unknown: ["?", "Typ unbekannt", "end"]};
+const NET_ROLES = {parent: "Parent", child: "Kind", sibling: "Nachbar", none: "–"};
+const netThresholds = () => (Array.isArray(S.network?.thresholds) && S.network.thresholds.length === 3 ? S.network.thresholds : [30, 80, 150]);
+
+/** Zigbee2MQTT-Instanzen aus den Gateways: Bezeichnung, Basis-Topic, Koordinator-IEEE. */
+function netInstances() {
+  return S.bridges.filter(b => b.source === "z2m").map(b => ({id: b.id, label: S.gateways[b.id]?.label || b.name,
+    base: S.gateways[b.id]?.topic || z2mInfoOf(b.id)?.base_topic || (api.demo ? (b.id === "b1" ? "zigbee2mqtt" : "zigbee2mqtt_2") : ""), coord: b.ieee || ""}));
+}
+
+/** Beispiel-Netz für die Demo aus den Demo-Geräten (Lampen und Steckdosen sind Router). */
+function demoNetwork(bridgeId) {
+  const coord = bridgeId === "b1" ? "0x00124b0000c00001" : "0x00124b0000c00002";
+  const devs = DEMO_DEVICES.map((d, i) => ({d, i})).filter(({d}) => d.bridge === bridgeId && d.model !== "CC2652P");
+  const nodes = [{ieeeAddr: coord, friendlyName: "Coordinator", type: "Coordinator", networkAddress: 0}, ...devs.map(({d, i}) => ({
+    ieeeAddr: d.ieee, friendlyName: d.name, type: /bulb|Hue|TS011F/i.test(d.orig_name) ? "Router" : "EndDevice", networkAddress: 0x1000 + i * 17,
+    lastSeen: Date.now() - (d.ieee.endsWith("c5") ? 400 * 86400e3 : (i + 1) * 95e3), definition: {model: d.model, vendor: d.manufacturer}}))];
+  const id = k => (k === "C" ? coord : DEMO_DEVICES[k].ieee);
+  // [Tabelle von, über, LQI, relationship]
+  const L = bridgeId === "b1"
+    ? [["C", 0, 180, 2], [0, "C", 170, 0], ["C", 3, 60, 2], [3, "C", 75, 0], [0, 1, 150, 2], [1, 0, 160, 2], [0, 3, 140, 2], [3, 0, 120, 2],
+       [1, 2, 90, 2], [2, 1, 85, 2], ["C", 2, 25, 2], [2, "C", 0, 2], [1, 4, 110, 1], [0, 6, 45, 1], ["C", 7, 130, 1]]
+    : [["C", 9, 120, 2], [9, "C", 130, 0], ["C", 10, 35, 2], [10, "C", 40, 0], [9, 10, 100, 2], [10, 9, 95, 2], [10, 8, 70, 1], [9, 11, 150, 1]];
+  return {nodes, links: L.map(([owner, other, lqi, rel]) => ({source: {ieeeAddr: id(other)}, target: {ieeeAddr: id(owner)}, lqi, linkquality: lqi, relationship: rel, depth: other === "C" ? 0 : 1}))};
+}
+
+const netApi = {
+  demoScans: {},
+  async load(inst, statusOnly = false) {
+    if (api.demo) {
+      const started = this.demoScans[inst.id], running = started && Date.now() - started < 3500;
+      const scan = started ? {running, started: new Date(started).toISOString(), finished: running ? "" : new Date(started + 3500).toISOString(), error: ""} : {};
+      return {scan, value: demoNetwork(inst.id), scanned_at: new Date(started && !running ? started + 3500 : Date.now() - 3600e3).toISOString(), source: "scan"};
+    }
+    const q = new URLSearchParams({coordinator: inst.coord});
+    if (inst.base) q.set("base_topic", inst.base);
+    if (statusOnly) q.set("status", "1");
+    const r = await fetch("api/networkmap?" + q);
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+  async start(inst) {
+    if (api.demo) { this.demoScans[inst.id] = Date.now(); return {running: true, started: new Date().toISOString()}; }
+    return api.post("api/networkmap", {base_topic: inst.base});
+  }
+};
+
+async function loadNetwork(inst) {
+  try { NET.data[inst.id] = await netApi.load(inst); } catch (e) { NET.data[inst.id] = {error: e.message}; }
+  NET.data[inst.id].base = inst.base; // Basis-Topic kann erst nach dem Laden erkannt werden – dann neu laden
+  if (NET.data[inst.id].scan?.running) pollScan(inst);
+  if (!$("#tab-network").hidden) renderNetwork();
+}
+/** Fragt während eines Scans alle 2 s nach dem Stand; aktualisiert nur die Statuszeile, am Ende den ganzen Baum. */
+function pollScan(inst) {
+  if (NET.poll[inst.id]) return;
+  const tick = async () => {
+    let st;
+    try { st = (await netApi.load(inst, true)).scan || {}; } catch (e) { st = NET.data[inst.id]?.scan || {}; }
+    NET.data[inst.id] = {...NET.data[inst.id], scan: st};
+    if (st.running) { if (NET.inst === inst.id) netStatus(); NET.poll[inst.id] = setTimeout(tick, 2000); return; }
+    delete NET.poll[inst.id];
+    toast(st.error ? "Netzwerk-Scan fehlgeschlagen" : "Netzwerk-Scan fertig – Baum aktualisiert");
+    await loadNetwork(inst);
+  };
+  NET.poll[inst.id] = setTimeout(tick, 2000);
+}
+function netStatus() {
+  const box = $("#netStatus"), inst = netInstances().find(i => i.id === NET.inst);
+  if (!box || !inst) return;
+  const sc = NET.data[inst.id]?.scan || {}, secs = sc.started ? Math.max(0, Math.round((Date.now() - new Date(sc.started)) / 1000)) : 0;
+  box.innerHTML = sc.running ? `<span class="spin"></span> Scan läuft … ${secs} s <span class="sub">(dauert meist 10–60 s)</span>` : "";
+  const btn = $("#netScan");
+  if (btn) { btn.disabled = !!sc.running || !inst.base; btn.textContent = sc.running ? "Scan läuft …" : "Scan starten"; }
+}
+
+const netAgo = ms => {
+  if (!ms) return "–";
+  const s = Math.round((Date.now() - ms) / 1000);
+  const txt = s < 90 ? "gerade eben" : s < 5400 ? `vor ${Math.round(s / 60)} Min.` : s < 129600 ? `vor ${Math.round(s / 3600)} Std.` : s < 86400 * 60 ? `vor ${Math.round(s / 86400)} Tagen` : `vor ${Math.round(s / 86400 / 30.4)} Monaten`;
+  return `<span title="${esc(new Date(ms).toLocaleString("de-DE"))}">${txt}</span>`;
+};
+
+function renderNetwork() {
+  const root = $("#tab-network");
+  if (typeof ZigbeeTree === "undefined") { root.innerHTML = `<div class="banner">Das Netzwerk-Modul wurde nicht geladen – bitte die Seite neu laden.</div>`; return; }
+  const insts = netInstances();
+  if (!insts.length) { root.innerHTML = `<div class="panel"><h2>Netzwerk</h2><p class="sub">Keine Zigbee2MQTT-Instanz gefunden. Der Netzwerk-Baum zeigt Zigbee2MQTT-Netze (ZHA wird hier nicht unterstützt).</p></div>`; return; }
+  if (!insts.some(i => i.id === NET.inst)) NET.inst = insts[0].id;
+  const inst = insts.find(i => i.id === NET.inst), d = NET.data[inst.id];
+  const head = `<div class="bar">
+      ${insts.length > 1 ? `<div class="chips">${insts.map(i => `<button data-inst="${esc(i.id)}" class="${i.id === inst.id ? "on" : ""}">${esc(i.label)}</button>`).join("")}</div>` : `<b>${esc(inst.label)}</b>`}
+      <span class="sub">${inst.base ? `Basis-Topic <code>${esc(inst.base)}</code>` : "Basis-Topic unbekannt – im Tab „Gateways“ eintragen"}</span>
+      <span class="sub">${d?.value ? `Letzter Scan: ${esc(fmtDate(d.scanned_at))}${d.source?.startsWith("sensor.") ? ` (aus ${esc(d.source)})` : ""}` : ""}</span>
+      <span style="flex:1"></span><span id="netStatus"></span>
+      <button class="btn primary" id="netScan" title="Fragt alle Router nach ihren Nachbarn und deren Empfang (LQI). Belastet das Netz kurz, deshalb nur auf Knopfdruck.">Scan starten</button>
+    </div>${d?.scan?.error ? `<div class="banner" style="border-left-color:var(--new)">${esc(d.scan.error)}</div>` : ""}`;
+  if (!d || (d.base !== inst.base && !d.scan?.running)) { root.innerHTML = head + `<p class="sub"><span class="spin"></span> Lade …</p>`; netBind(root, inst); netStatus(); loadNetwork(inst); return; }
+  if (d.error || !d.value) {
+    root.innerHTML = head + `<div class="panel"><p>${d.error ? "Netzwerkdaten nicht lesbar: " + esc(d.error) : "Für diese Instanz gibt es noch keinen Scan."}</p>
+      <p class="sub">„Scan starten“ fragt Zigbee2MQTT nach der aktuellen Netzwerkkarte. Das dauert meist 10–60 Sekunden.</p></div>`;
+    netBind(root, inst); netStatus(); return;
+  }
+  let t = NET.trees[inst.id];
+  if (!t || t.key !== d.scanned_at) {
+    try { t = ZigbeeTree.build(d.value); t.key = d.scanned_at; NET.trees[inst.id] = t; }
+    catch (e) { root.innerHTML = head + `<div class="banner">Netzwerkkarte nicht lesbar: ${esc(e.message)}</div>`; netBind(root, inst); return; }
+  }
+  const th = netThresholds(), cls = v => ZigbeeTree.lqiClass(v, th);
+  const name = k => t.all.get(k)?.node.name || k;
+  // Wert links: Parent/Nachbar hört dieses Gerät · rechts: dieses Gerät hört Parent/Nachbar
+  const val = l => (l.lqiOut !== null && l.lqiIn !== null && l.lqiOut !== l.lqiIn ? `${l.lqiOut} / ${l.lqiIn}` : `${l.lqiOut ?? l.lqiIn}`);
+  const badge = (l, me, other) => `<span class="q ${cls(l.lqi)}" title="${esc(`${other} hört ${me}: ${l.lqiOut ?? "–"} · ${me} hört ${other}: ${l.lqiIn ?? "–"}${l.lqiOut === 0 || l.lqiIn === 0 ? " (0 = kein aktueller Messwert)" : ""}`)}">${val(l)}</span>`;
+  const weakOf = n => n.link && ["weak", "bad"].includes(cls(n.link.lqi));
+  const filtering = !!(NET.q || NET.weak || NET.type);
+  const q = NET.q.toLowerCase();
+  const match = n => (!q || [n.node.name, n.ieee, n.node.model, n.node.vendor].join(" ").toLowerCase().includes(q)) && (!NET.weak || weakOf(n)) && (!NET.type || n.node.type === NET.type);
+  let visible = null;
+  if (filtering) {
+    visible = new Set();
+    for (const n of t.all.values()) if (match(n)) for (let x = n; x && !visible.has(x.ieee); x = x.parent ? t.all.get(x.parent) : null) visible.add(x.ieee);
+  }
+  const routing = k => ["Coordinator", "Router"].includes(t.all.get(k)?.node.type) && !t.all.get(k)?.node.placeholder;
+  const row = n => {
+    const kids = n.children.filter(c => !visible || visible.has(c.ieee)), open = filtering || !NET.collapsed.has(n.ieee);
+    const others = n === t.coordinator ? [] : n.neighbors.filter(e => e.ieee !== n.parent && !n.children.some(c => c.ieee === e.ieee) && routing(e.ieee));
+    const [short, long, tc] = NET_TYPES[n.node.type] || NET_TYPES.Unknown;
+    return `<div class="tn ${tc}${NET.sel === n.ieee ? " sel" : ""}" data-ieee="${esc(n.ieee)}">
+        ${kids.length ? `<button class="tw" data-tog="${esc(n.ieee)}" title="${open ? "Zuklappen" : "Aufklappen"}">${open ? "▾" : "▸"}</button>` : `<span class="tw"></span>`}
+        <span class="ty ${tc}" title="${long}">${short}</span><span class="nm">${esc(n.node.name)}</span>
+        ${n.children.length ? `<span class="sub" title="${n.children.length} direkt, ${n.descendants} insgesamt">(${n.children.length})</span>` : ""}
+        ${n.link ? badge(n.link, n.node.name, name(n.parent)) : ""}
+        ${n.guessed ? `<span class="sub" title="Kein Parent-Eintrag im Scan – angehängt an den stärksten Router-Nachbarn">vermutet</span>` : ""}
+        ${n.node.placeholder ? `<span class="sub" title="Steht in einer Nachbartabelle, ist Zigbee2MQTT aber nicht (mehr) bekannt">nicht in Z2M</span>` : ""}
+        ${n.node.failed.includes("lqi") ? `<span class="sub" title="Dieser Router hat auf den Scan nicht geantwortet – nur die Sicht seiner Nachbarn ist bekannt">⚠ keine Antwort</span>` : ""}
+        ${others.length ? `<button class="alt" data-alt="${esc(n.ieee)}" title="Andere Router in Reichweite – darüber könnte das Gerät auch gehen">${NET.alt.has(n.ieee) ? "▴" : "▾"} ${others.length} Alternative${others.length === 1 ? "" : "n"}</button>` : ""}
+      </div>
+      ${NET.alt.has(n.ieee) && others.length ? `<div class="altlist">${others.map(e => `<div>${badge(e, n.node.name, name(e.ieee))}<a href="#" data-goto="${esc(e.ieee)}">${esc(name(e.ieee))}</a><span>${NET_ROLES[e.role]}</span></div>`).join("")}</div>` : ""}
+      ${kids.length && open ? `<div class="tsub">${kids.map(row).join("")}</div>` : ""}`;
+  };
+  const unc = t.unconnected.filter(u => !visible || visible.has(u.ieee)), uncOpen = filtering || !NET.collapsed.has("__unc");
+  const weakCount = [...t.all.values()].filter(weakOf).length;
+  const scrolled = $(".nettree", root)?.scrollTop || 0;
+  root.innerHTML = head + `
+    <div class="bar">
+      <input id="netQ" type="search" placeholder="Gerät suchen (Name, IEEE, Modell) …" value="${esc(NET.q)}" style="width:250px">
+      <div class="chips"><button data-nf="" class="${NET.weak ? "" : "on"}">Alle</button><button data-nf="weak" class="${NET.weak ? "on" : ""}" title="Verbindungen zum Parent unter ${th[1]}">Schwache Verbindungen (${weakCount})</button></div>
+      <select id="netType"><option value="">Alle Typen</option><option value="Router"${NET.type === "Router" ? " selected" : ""}>Router</option><option value="EndDevice"${NET.type === "EndDevice" ? " selected" : ""}>Endgeräte</option></select>
+      <button class="btn" id="netOpen">Alles auf</button><button class="btn" id="netClose">Alles zu</button>
+      <span style="flex:1"></span>
+      <span class="sub" title="Rot unter der ersten Grenze, orange bis zur zweiten, gelb bis zur dritten, grün ab der dritten">LQI-Grenzen</span>
+      ${th.map((v, i) => `<input class="netTh" data-i="${i}" type="number" min="0" max="255" value="${v}" style="width:64px">`).join("")}
+    </div>
+    <p class="sub" style="margin:-4px 0 10px">${t.stats.devices} Geräte · ${t.stats.routers} Router · ${t.stats.endDevices} Endgeräte · ${t.stats.unconnected} nicht verbunden ·
+      <span class="q good">≥ ${th[2]}</span> <span class="q ok">${th[1]}–${th[2] - 1}</span> <span class="q weak">${th[0]}–${th[1] - 1}</span> <span class="q bad">&lt; ${th[0]}</span>
+      · Wert links: Parent hört das Gerät, rechts: Gerät hört den Parent</p>
+    <div class="netwrap">
+      <div class="card nettree">${t.coordinator && (!visible || visible.has(t.coordinator.ieee)) ? row(t.coordinator) : ""}
+        ${unc.length ? `<div class="grp" data-tog="__unc">${uncOpen ? "▾" : "▸"} Nicht verbunden (${filtering ? unc.length : t.stats.unconnected})
+          <span class="sub hide-s" style="font-weight:400">– im Scan ohne Verbindung (z. B. Batterie leer, außer Reichweite, schläft)</span></div>${uncOpen ? `<div class="tsub">${unc.map(row).join("")}</div>` : ""}` : ""}
+        ${filtering && !visible.size ? `<p class="empty">Nichts gefunden.</p>` : ""}</div>
+      <div class="panel netdetail" id="netDetail"></div>
+    </div>`;
+  $(".nettree", root).scrollTop = scrolled;
+  netBind(root, inst);
+  netShowDetail(t, inst);
+  netStatus();
+  if (d.scan?.running) pollScan(inst);
+}
+
+/** Detailbereich zum gewählten Gerät. */
+function netShowDetail(t, inst) {
+  const box = $("#netDetail"), n = t.all.get(NET.sel);
+  if (!box) return;
+  if (!n) { box.innerHTML = `<h2>Details</h2><p class="sub">Gerät im Baum anklicken: Typ, IEEE, Parent, Weg zum Koordinator, alle Nachbarn mit LQI und wann es zuletzt gesehen wurde.</p>`; return; }
+  const th = netThresholds(), q = v => (v === null || v === undefined ? `<span class="sub">–</span>` : `<span class="q ${ZigbeeTree.lqiClass(v, th)}">${v}</span>`);
+  const name = k => t.all.get(k)?.node.name || k, nd = n.node;
+  const dev = S.devices.find(x => (x.ieee || "").toLowerCase() === n.ieee);
+  const path = ZigbeeTree.pathTo(t, n.ieee);
+  const failed = {lqi: "Nachbartabelle (LQI) nicht abrufbar", routingTable: "Routing-Tabelle nicht abrufbar"};
+  box.innerHTML = `<h2 style="margin:0 0 2px">${esc(nd.name)}</h2>
+    <div class="sub">${(NET_TYPES[nd.type] || NET_TYPES.Unknown)[1]}${nd.vendor || nd.model ? " · " + esc([nd.vendor, nd.model].filter(Boolean).join(" ")) : ""}${nd.placeholder ? " · Zigbee2MQTT nicht bekannt" : ""}</div>
+    ${dev ? `<div class="links" style="margin:8px 0">${openLinks(dev)}</div>` : ""}
+    <div class="kv">
+      <span>IEEE</span><code>${esc(n.ieee)}</code>
+      <span>Netzwerkadresse</span><code>${nd.nwk === null ? "–" : "0x" + nd.nwk.toString(16).padStart(4, "0")}</code>
+      <span>Parent</span><span>${n.parent ? `<a href="#" data-goto="${esc(n.parent)}">${esc(name(n.parent))}</a> ${q(n.link?.lqi)}${n.guessed ? ` <span class="sub">vermutet</span>` : ""}` : n === t.coordinator ? "– (Wurzel)" : "nicht verbunden"}</span>
+      ${path.length > 1 && path[0] === t.coordinator?.ieee ? `<span>Weg</span><span>${path.map(k => esc(name(k))).join(" → ")}</span><span>Schwächste Stelle</span><span>${q(Number.isFinite(n.bottleneck) ? n.bottleneck : null)}</span>` : ""}
+      ${n.children.length ? `<span>Hängen dran</span><span>${n.children.length} direkt, ${n.descendants} insgesamt</span>` : ""}
+      <span>Zuletzt gesehen</span><span>${nd.type === "Coordinator" ? "–" : netAgo(nd.lastSeen)}</span>
+      ${dev ? `<span>In Home Assistant</span><span>${esc(dev.name)}${dev.area ? " · " + esc(dev.area) : ""}</span>` : ""}
+      ${nd.failed.length ? `<span>Scan</span><span>⚠ ${nd.failed.map(f => esc(failed[f] || f)).join(", ")}</span>` : ""}
+    </div>
+    <h2 style="font-size:14px;margin:14px 0 4px">Nachbarn (${n.neighbors.length})</h2>
+    ${n.neighbors.length ? `<table class="nbt"><thead><tr><th>Gerät</th><th>Rolle</th><th title="Wie gut der Nachbar dieses Gerät empfängt">hört es</th><th title="Wie gut dieses Gerät den Nachbarn empfängt">hört ihn</th></tr></thead>
+      <tbody>${n.neighbors.map(e => `<tr data-goto="${esc(e.ieee)}"><td>${esc(name(e.ieee))}</td><td class="sub">${NET_ROLES[e.role]}</td><td>${q(e.lqiOut)}</td><td>${q(e.lqiIn)}</td></tr>`).join("")}</tbody></table>`
+      : `<p class="sub">Keine Nachbarn im Scan.</p>`}`;
+  box.querySelectorAll("[data-goto]").forEach(el => el.onclick = e => { e.preventDefault(); netGoto(el.dataset.goto); });
+  if (dev) {
+    $(".lnk.ha", box) && ($(".lnk.ha", box).onclick = e => haNavigate(e, haDevicePath(dev)));
+    $(".lnk.z2m", box) && ($(".lnk.z2m", box).onclick = e => openZ2m(e, z2mLink(dev)));
+    $(".lnk.off", box) && ($(".lnk.off", box).onclick = () => showTab("gateways"));
+  }
+}
+/** Gerät auswählen; zugeklappte Äste darüber öffnen und hinscrollen. */
+function netGoto(ieee) {
+  const t = NET.trees[NET.inst];
+  if (!t?.all.has(ieee)) return;
+  NET.sel = ieee;
+  let opened = false;
+  for (let x = t.all.get(ieee); x?.parent; x = t.all.get(x.parent)) if (NET.collapsed.delete(x.parent)) opened = true;
+  if (!t.all.get(ieee).parent && t.all.get(ieee) !== t.coordinator && NET.collapsed.delete("__unc")) opened = true;
+  const row = document.querySelector(`#tab-network .tn[data-ieee="${CSS.escape(ieee)}"]`);
+  if (opened || !row) { if (!row) { NET.q = ""; NET.weak = false; NET.type = ""; } renderNetwork(); }
+  else { document.querySelectorAll("#tab-network .tn.sel").forEach(el => el.classList.remove("sel")); row.classList.add("sel"); netShowDetail(t); }
+  document.querySelector(`#tab-network .tn[data-ieee="${CSS.escape(ieee)}"]`)?.scrollIntoView({block: "nearest"});
+}
+
+function netBind(root, inst) {
+  root.querySelectorAll("[data-inst]").forEach(b => b.onclick = () => { NET.inst = b.dataset.inst; NET.sel = ""; renderNetwork(); });
+  $("#netScan", root) && ($("#netScan", root).onclick = async () => {
+    try {
+      const sc = await netApi.start(inst);
+      NET.data[inst.id] = {...NET.data[inst.id], scan: sc};
+      netStatus(); pollScan(inst);
+    } catch (e) { toast("Scan nicht gestartet: " + e.message); }
+  });
+  const tree = $(".nettree", root);
+  if (!tree) return;
+  $("#netQ", root).oninput = e => { NET.q = e.target.value; const p = e.target.selectionStart; renderNetwork(); const i = $("#netQ"); i.focus(); i.setSelectionRange(p, p); };
+  root.querySelectorAll("[data-nf]").forEach(b => b.onclick = () => { NET.weak = b.dataset.nf === "weak"; renderNetwork(); });
+  $("#netType", root).onchange = e => { NET.type = e.target.value; renderNetwork(); };
+  $("#netOpen", root).onclick = () => { NET.collapsed.clear(); renderNetwork(); };
+  $("#netClose", root).onclick = () => {
+    const t = NET.trees[inst.id];
+    for (const n of t.all.values()) if (n.children.length && n !== t.coordinator) NET.collapsed.add(n.ieee);
+    NET.collapsed.add("__unc"); renderNetwork();
+  };
+  root.querySelectorAll(".netTh").forEach(inp => inp.onchange = () => {
+    const th = [...netThresholds()]; th[+inp.dataset.i] = Math.max(0, Math.min(255, Math.round(+inp.value) || 0));
+    if (th[0] <= th[1] && th[1] <= th[2]) { S.network = {...S.network, thresholds: th}; persist(); } else toast("Die Grenzen müssen aufsteigend sein");
+    renderNetwork();
+  });
+  tree.onclick = e => {
+    const tog = e.target.closest("[data-tog]"), alt = e.target.closest("[data-alt]"), go = e.target.closest("[data-goto]"), tn = e.target.closest(".tn");
+    if (tog) { const k = tog.dataset.tog; NET.collapsed.has(k) ? NET.collapsed.delete(k) : NET.collapsed.add(k); renderNetwork(); return; }
+    if (alt) { const k = alt.dataset.alt; NET.alt.has(k) ? NET.alt.delete(k) : NET.alt.add(k); renderNetwork(); return; }
+    if (go) { e.preventDefault(); netGoto(go.dataset.goto); return; }
+    if (tn) netGoto(tn.dataset.ieee);
+  };
+}
 
 // ---------- Schema-Tab ----------
 function renderScheme() {
@@ -1033,7 +1563,7 @@ async function restoreBackup(payload, label) {
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
   document.querySelectorAll("main section").forEach(s => s.hidden = s.id !== "tab-" + b.dataset.tab);
-  ({devices: renderDevices, gateways: renderGateways, scheme: renderScheme, export: renderExport})[b.dataset.tab]();
+  ({devices: renderDevices, gateways: renderGateways, network: renderNetwork, scheme: renderScheme, export: renderExport})[b.dataset.tab]();
 });
 
 (async () => {
@@ -1043,7 +1573,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   S.gateways = st.gateways || {};
   S.areas = data.areas || []; S.haFloors = data.floors || [];
   if (st.scheme?.pattern) S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, floors: clone(DEFAULT_SCHEME.floors), ...st.scheme};
-  S.meta = st.meta || {}; S.planned = st.planned || [];
+  S.meta = st.meta || {}; S.planned = st.planned || []; S.network = st.network || {};
   for (const k of OPTION_KEYS) if (typeof st.options?.[k] === "boolean") S[k] = st.options[k];
   S.storeLoaded = !api.error;
   if (api.error) $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--new)"><b>Verbindung zu Home Assistant fehlgeschlagen.</b> Das Add-on läuft, kann aber keine Geräte laden – keine Demo-Daten.<br><code>${esc(api.error)}</code><br><button class="btn" style="margin-top:8px" onclick="location.reload()">Erneut versuchen</button> <a href="api/diag" target="_blank">Diagnose öffnen</a> <span class="sub">(Details auch im Add-on-Log)</span></div>`;
@@ -1057,7 +1587,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   Promise.all([detectBases(), api.z2mUis().then(u => { S.z2mUis = Array.isArray(u) ? u : []; }).catch(() => {})]).then(([n]) => {
     if (n) toast(n + " Z2M-Basis-Topic(s) erkannt");
     const a = document.activeElement, tab = document.querySelector("main section:not([hidden])");
-    if (!S.editing && (!a || a === document.body || !tab?.contains(a))) ({"tab-devices": renderDevices, "tab-gateways": renderGateways})[tab?.id]?.();
+    if (!S.editing && (!a || a === document.body || !tab?.contains(a))) ({"tab-devices": renderDevices, "tab-gateways": renderGateways, "tab-network": renderNetwork})[tab?.id]?.();
   });
 })();
 </script>
