@@ -589,6 +589,95 @@ async def stop_backup_loop(app):
     app["backup_task"].cancel()
 
 
+# ---------- Netzwerk (Reiter „Netzwerk“) ----------
+NETMAP_TIMEOUT = 300   # Z2M fragt jeden Router einzeln ab (1 s Pause, bei Fehlern 5 s): große Netze brauchen Minuten
+SCANS = {}             # Basis-Topic → {"running", "started", "finished", "error"}
+
+
+def netmap_file(base):
+    return DATA / "networkmap" / f"{slugify(base) or 'zigbee2mqtt'}.json"
+
+
+def iso_now():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def newer(a, b):
+    """Liefert True, wenn Zeitpunkt a (ISO) nach b liegt; Unlesbares zählt als älter."""
+    def parse(v):
+        try:
+            return datetime.fromisoformat(v).timestamp()
+        except (TypeError, ValueError):
+            return 0
+    return parse(a) > parse(b)
+
+
+async def sensor_networkmap(coordinator):
+    """Networkmap aus einem vorhandenen HA-Sensor (json_attributes mit nodes/links), erkannt am Koordinator der Instanz."""
+    if not coordinator:
+        return None
+    ok, states = await ha_try({"type": "get_states"})
+    for st in states if ok else []:
+        attrs = st.get("attributes") or {}
+        if not (st["entity_id"].startswith("sensor.") and isinstance(attrs.get("nodes"), list) and isinstance(attrs.get("links"), list)):
+            continue
+        if any(isinstance(n, dict) and n.get("type") == "Coordinator" and str(n.get("ieeeAddr", "")).lower() == coordinator.lower()
+               for n in attrs["nodes"]):
+            return {"value": {"nodes": attrs["nodes"], "links": attrs["links"]}, "scanned_at": st.get("last_updated", ""),
+                    "source": st["entity_id"]}
+    return None
+
+
+async def get_networkmap(request):
+    """Letzter Scan einer Instanz: eigener Scan des Add-ons oder – wenn neuer – ein vorhandener Networkmap-Sensor in HA."""
+    base = safe_topic(request.query["base_topic"]) if request.query.get("base_topic") else ""
+    if request.query.get("status"):  # nur der Stand eines laufenden Scans (wird während des Scans alle 2 s abgefragt)
+        return web.json_response({"base_topic": base, "scan": SCANS.get(base) or {}})
+    data = {}
+    if base:
+        try:
+            data = json.loads(netmap_file(base).read_text())
+        except (OSError, ValueError):
+            pass
+    sensor = await sensor_networkmap(request.query.get("coordinator", ""))
+    if sensor and newer(sensor["scanned_at"], data.get("scanned_at")):
+        data = sensor
+    return web.json_response({"base_topic": base, "scan": SCANS.get(base) or {}, **data})
+
+
+async def run_networkmap(base):
+    state = SCANS[base]
+    try:
+        result = await z2m_request(base, "networkmap", {"type": "raw", "routes": False}, timeout=NETMAP_TIMEOUT)
+        failure = await z2m_failure(base, result)
+        value = (result.get("data") or {}).get("value") if isinstance(result.get("data"), dict) else None
+        if not failure and not (isinstance(value, dict) and isinstance(value.get("nodes"), list)):
+            failure = "Zigbee2MQTT hat keine Networkmap geliefert" + (f" ({result.get('status')})" if result.get("status") else "")
+        if failure:
+            state.update(error=failure)
+            return
+        write_json(netmap_file(base), {"base_topic": base, "scanned_at": iso_now(), "value": value, "source": "scan"})
+        state.update(error="")
+    except Exception as err:  # noqa: BLE001
+        log.exception("Netzwerk-Scan für %s fehlgeschlagen", base)
+        state.update(error=f"Scan fehlgeschlagen: {getattr(err, 'text', None) or err!r}")
+    finally:
+        state.update(running=False, finished=iso_now())
+
+
+async def start_networkmap(request):
+    """Startet den Scan im Hintergrund (er dauert oft länger als eine HTTP-Anfrage warten sollte); die Oberfläche fragt nach."""
+    base = safe_topic((await request.json()).get("base_topic"))
+    if not (SCANS.get(base) or {}).get("running"):
+        SCANS[base] = {"running": True, "started": iso_now(), "finished": "", "error": ""}
+        background(run_networkmap(base))
+    return web.json_response(SCANS[base])
+
+
+async def tree_js(request):
+    return web.FileResponse(WEB / "zigbee-tree.js", headers={"Cache-Control": "no-cache"})
+
+
 def common_prefix(object_ids):
     """Gemeinsamer Anfang (an Unterstrichen getrennt) aller Entity-Namen eines Geräts, z. B. s2_bad_tem01 – nur bei ≥ 2 Entitäten."""
     if len(object_ids) < 2:
@@ -1221,6 +1310,9 @@ def make_app():
     app.on_cleanup.append(stop_backup_loop)
     app.add_routes([
         web.get("/", index),
+        web.get("/zigbee-tree.js", tree_js),
+        web.get("/api/networkmap", get_networkmap),
+        web.post("/api/networkmap", start_networkmap),
         web.get("/api/state", get_state),
         web.get("/api/diag", diag),
         web.put("/api/store", put_store),
