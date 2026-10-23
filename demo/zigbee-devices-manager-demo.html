@@ -23,6 +23,7 @@ input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
 button.btn{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
 button.btn:hover{border-color:var(--accent)}
 button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:600}
+button.danger{background:var(--q-bad);color:#fff;border-color:var(--q-bad);font-weight:600}
 button:disabled{opacity:.45;cursor:default}
 .chips{display:flex;gap:4px}
 .chips button{background:var(--chip);border:0;border-radius:999px;padding:4px 12px;cursor:pointer;color:var(--muted)}
@@ -457,6 +458,7 @@ const api = {
     try { store = JSON.parse(localStorage.getItem("zdm-demo-store") || "{}"); } catch (e) {}
     let devices = clone([...DEMO_DEVICES, ...DEMO_MATTER]);
     try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); devices.forEach(d => { if (n[d.id]) { d.name = n[d.id]; d.is_new = false; } }); } catch (e) {}
+    try { const gone = JSON.parse(localStorage.getItem("zdm-demo-deleted") || "[]"); devices = devices.filter(d => !gone.includes(d.id)); } catch (e) {}
     return {devices, store, bridges: DEMO_BRIDGES, areas: DEMO_AREAS, floors: DEMO_FLOORS};
   },
   async saveStore(store) {
@@ -529,6 +531,28 @@ const api = {
     if (this.demo) return {updated_references: [{kind: "dashboard", title: "Übersicht"}], errors: [], checks: [{name: "Verweise", status: "ok", detail: "Beispiel: keine alten Entity-IDs mehr gefunden"}]};
     return this.post("api/fix_references", {items: last.items, renamed: last.renamed, ...last.opts});
   },
+  // ---- Löschen: Vorschau, Ausführung, erneute Prüfung ----
+  delPayload: list => list.map(d => ({device_id: d.id, name: d.name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || ""})),
+  async planDelete(list) {
+    if (this.demo) {
+      const devices = list.map(d => { const s = d.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+        return {device_id: d.id, name: d.name, entities: [`${d.source === "matter" ? "switch" : "light"}.${s}`, `sensor.${s}_battery`], children: [], blocked: false}; });
+      return {devices, usages: [{kind: "dashboard", title: "Übersicht (Beispiel)", entities: [devices[0].entities[0]]}], unreadable: 0};
+    }
+    return this.post("api/delete/plan", {items: this.delPayload(list)});
+  },
+  async deleteDevices(list, progressId) {
+    if (this.demo) {
+      try { const gone = JSON.parse(localStorage.getItem("zdm-demo-deleted") || "[]"); localStorage.setItem("zdm-demo-deleted", JSON.stringify([...gone, ...list.map(d => d.id)])); } catch (e) {}
+      await new Promise(r => setTimeout(r, 2000));
+      return {ok: true, errors: [], forced: [], deleted: list.map(d => d.id), checks: [{name: "Home Assistant", status: "ok", detail: list.length + " Gerät(e) aus Home Assistant gelöscht (Demo)"}]};
+    }
+    return this.post("api/delete", {items: this.delPayload(list), force: S.deleteForce, progress_id: progressId});
+  },
+  async verifyDelete(list, forced) {
+    if (this.demo) return {checks: [{name: "Home Assistant", status: "ok", detail: list.length + " Gerät(e) aus Home Assistant gelöscht (Demo)"}]};
+    return this.post("api/delete/verify", {items: this.delPayload(list), forced});
+  },
   async z2mUis() {
     if (this.demo) return DEMO_UIS;
     const r = await fetch("api/z2m_uis"); return r.ok ? r.json() : [];
@@ -573,9 +597,9 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], z2mUis: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, storeLoaded: false, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: false, updateYaml: false, updateNodered: false};
-/** Haken beim Umbenennen – werden im Store gemerkt. */
-const OPTION_KEYS = ["setArea", "renameZ2m", "renameEntities", "updateRefs", "updateYaml", "updateNodered"];
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], z2mUis: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, storeLoaded: false, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: false, updateYaml: false, updateNodered: false, deleteForce: true};
+/** Haken beim Umbenennen und Löschen – werden im Store gemerkt. */
+const OPTION_KEYS = ["setArea", "renameZ2m", "renameEntities", "updateRefs", "updateYaml", "updateNodered", "deleteForce"];
 
 const storeData = () => ({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways, options: Object.fromEntries(OPTION_KEYS.map(k => [k, S[k]])), network: S.network});
 function persist() {
@@ -857,6 +881,7 @@ function renderDevices() {
       <select id="bType">${typeOpts("")}</select>
       <button class="btn" id="bAssign" ${S.sel.size ? "" : "disabled"}>Zuweisen</button>
       <button class="btn" id="bArea" ${S.sel.size ? "" : "disabled"} title="Ordnet die ausgewählten Geräte ihrem gewählten Raum in Home Assistant zu – ohne sie umzubenennen">Raum in HA setzen</button>
+      <button class="btn" id="bDel" ${S.sel.size ? "" : "disabled"} title="Löscht die ausgewählten Geräte restlos – in Zigbee2MQTT, ZHA bzw. Matter und in Home Assistant (mit Vorschau und Bestätigung)">🗑 Löschen</button>
       <span style="flex:1"></span>
       <label class="sub" title="Ordnet das Gerät in Home Assistant dem gewählten Raum (Bereich) zu; fehlende Bereiche werden angelegt"><input type="checkbox" id="rArea" ${S.setArea ? "checked" : ""}> Raum als Bereich in HA setzen</label>
       <label class="sub" title="Benennt Zigbee2MQTT-Geräte direkt in Z2M um (Friendly-Name und MQTT-Topic) – wie Z2Ms eigener Dialog. Home Assistant übernimmt den Namen danach von Z2M; ein abweichender alter Name in HA wird entfernt."><input type="checkbox" id="rZ2m" ${S.renameZ2m ? "checked" : ""}> In Zigbee2MQTT umbenennen</label>
@@ -916,6 +941,7 @@ function renderDevices() {
     if (name?.trim()) { S.planned.push({id: uid("p_"), name: name.trim()}); persist(); renderDevices(); }
   };
   $("#bArea", root).onclick = () => assignAreas(rows.filter(d => S.sel.has(d.id)));
+  $("#bDel", root).onclick = () => deleteDevices(rows.filter(d => S.sel.has(d.id)));
   $("#bAssign", root).onclick = () => {
     const room = $("#bRoom", root).value, type = $("#bType", root).value, house = $("#bHouse", root)?.value, floor = $("#bFloor", root)?.value;
     S.sel.forEach(id => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type}), ...(house && {house}), ...(floor && {floor})}; });
@@ -1093,11 +1119,77 @@ function showChecks(checks, last, errors) {
       });
       $("#re", dlg).onclick = async () => {
         $("#re", dlg).disabled = true; $("#re", dlg).textContent = "Prüfe…";
-        try { draw((await api.verify(last)).checks); } catch (e) { toast("Prüfung fehlgeschlagen: " + e.message); draw(list); }
+        try { draw((await (last.recheck ? last.recheck() : api.verify(last))).checks); } catch (e) { toast("Prüfung fehlgeschlagen: " + e.message); draw(list); }
       };
     };
     draw(checks); document.body.appendChild(dlg); dlg.showModal(); dlg.oncancel = () => { dlg.remove(); resolve(); };
   });
+}
+
+/** Bestätigung zum Löschen: zeigt, was alles verschwindet, und gibt erst nach eingetipptem „LÖSCHEN“ frei. */
+function confirmDelete(real, planned, plan) {
+  return new Promise(resolve => {
+    const info = new Map(plan.devices.map(x => [x.device_id, x])), has = src => real.some(d => d.source === src);
+    const kinds = {automation: "Automation", script: "Skript", scene: "Szene", dashboard: "Dashboard"};
+    const ents = plan.devices.flatMap(x => x.blocked ? [] : x.entities);
+    const how = [
+      has("z2m") && "<b>Zigbee2MQTT:</b> Das Gerät wird aus dem Zigbee-Netz abgemeldet und aus Z2M entfernt, danach aus Home Assistant.",
+      has("zha") && "<b>ZHA:</b> Das Gerät wird aus dem Zigbee-Netz entfernt und aus Home Assistant gelöscht.",
+      has("matter") && "<b>Matter:</b> Home Assistant entfernt das Gerät aus seinem Matter-Netz. Ist es zusätzlich in Apple Home, Google Home o. ä. eingebunden, bleibt es dort."
+        + (real.some(d => d.source === "matter" && d.endpoint != null) ? " Geräte hinter einer Matter-Bridge in der Bridge selbst entfernen, sonst tauchen sie wieder auf." : "")
+    ].filter(Boolean);
+    const dlg = document.createElement("dialog");
+    dlg.style.cssText = "max-width:640px;width:92%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
+    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">🗑 ${real.length + planned.length} Gerät(e) restlos löschen</h2>
+      <div class="preview" style="max-height:170px;overflow:auto;line-height:1.6">${[...real.map(d => { const x = info.get(d.id) || {entities: [], children: []};
+          return `<b>${esc(d.name)}</b> <span class="sub">${esc(SOURCE_NAMES[d.source] || "")} · ${x.entities.length} Entität${x.entities.length === 1 ? "" : "en"}</span>`
+            + (x.blocked ? `<br><span style="color:var(--q-bad)">ZHA-Koordinator – wird nicht gelöscht</span>`
+              : x.children.length ? `<br><span style="color:var(--new)">⚠ Daran hängen ${x.children.length} Gerät(e) (${esc(x.children.slice(0, 5).join(", "))}${x.children.length > 5 ? " …" : ""}) – sie verschwinden mit.</span>` : ""); }),
+        ...planned.map(d => `<b>${esc(d.name)}</b> <span class="sub">geplant – wird nur aus der Liste entfernt</span>`)].join("<br>")}</div>
+      ${how.map(h => `<p class="sub" style="margin:8px 0 0">${h}</p>`).join("")}
+      ${ents.length ? `<p class="sub" style="margin-top:12px">Entitäten, die mit gelöscht werden (${ents.length}):</p><div class="preview" style="max-height:90px;overflow:auto">${ents.map(esc).join(", ")}</div>` : ""}
+      ${plan.usages.length ? `<div class="banner" style="border-left-color:var(--new);margin:12px 0 0;color:var(--fg)"><b>⚠ ${plan.usages.length} Automation(en)/Dashboard(s) verwenden diese Entitäten</b> und zeigen danach ins Leere:
+        <div class="sub" style="max-height:90px;overflow:auto;margin-top:4px">${plan.usages.map(u => `${kinds[u.kind] || u.kind}: <b>${esc(u.title)}</b> (${u.entities.map(esc).join(", ")})`).join("<br>")}</div></div>` : ""}
+      ${plan.unreadable ? `<p class="sub">${plan.unreadable} Automationen/Szenen sind nicht über die Oberfläche lesbar (YAML) und wurden nicht geprüft.</p>` : ""}
+      ${has("z2m") ? `<label class="sub" style="display:block;margin-top:12px" title="Zigbee2MQTT „Entfernen erzwingen“: das Gerät wird ohne Bestätigung aus Z2M gelöscht. Vor dem erneuten Anlernen zurücksetzen."><input type="checkbox" id="dForce" ${S.deleteForce ? "checked" : ""}> Antwortet ein Gerät nicht (z. B. schlafender Batterie-Sensor), trotzdem aus Zigbee2MQTT entfernen</label>` : ""}
+      <p class="sub" style="margin:12px 0 0">Vorher wird der Stand des Add-ons gesichert. Ein gelöschtes Gerät muss neu angelernt werden, um es wieder zu nutzen.</p>
+      <p style="margin:14px 0 6px">Zum Bestätigen <b>LÖSCHEN</b> eintippen:</p>
+      <input id="dWord" autocomplete="off" spellcheck="false" style="width:100%">
+      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="no">Abbrechen</button><button class="btn danger" id="yes" disabled>Endgültig löschen</button></div>`;
+    document.body.appendChild(dlg); dlg.showModal();
+    const word = $("#dWord", dlg), yes = $("#yes", dlg), typed = () => ["löschen", "loeschen"].includes(word.value.trim().toLowerCase());
+    const end = v => { dlg.close(); dlg.remove(); resolve(v); };
+    word.focus();
+    word.oninput = () => { yes.disabled = !typed(); };
+    word.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); if (typed()) yes.click(); } };
+    $("#no", dlg).onclick = () => end(false);
+    yes.onclick = () => { if (!typed()) return; const f = $("#dForce", dlg); if (f) { S.deleteForce = f.checked; persist(); } end(true); };
+    dlg.oncancel = () => end(false);
+  });
+}
+
+/** Löscht Geräte restlos (Zigbee2MQTT/ZHA/Matter und Home Assistant); geplante Geräte verschwinden nur aus der Liste. */
+async function deleteDevices(devs) {
+  const real = devs.filter(d => !d.planned), planned = devs.filter(d => d.planned);
+  let plan = {devices: [], usages: [], unreadable: 0};
+  try { if (real.length) plan = await api.planDelete(real); } catch (e) { toast("Vorschau fehlgeschlagen: " + e.message); return; }
+  if (!await confirmDelete(real, planned, plan)) return;
+  const blocked = new Set(plan.devices.filter(x => x.blocked).map(x => x.device_id)), list = real.filter(d => !blocked.has(d.id));
+  S.planned = S.planned.filter(p => !planned.some(d => d.id === p.id));
+  let res = null;
+  if (list.length) {
+    try { res = await runWithProgress("Löschen läuft …", pid => api.deleteDevices(list, pid)); }
+    catch (e) { toast("Löschen fehlgeschlagen: " + e.message); }
+  }
+  const gone = new Set([...(res?.deleted || []), ...planned.map(d => d.id)]);
+  for (const id of gone) { delete S.meta[id]; S.sel.delete(id); }
+  S.devices = S.devices.filter(d => !gone.has(d.id));
+  persist();
+  if (res) {
+    await refreshFromHA(true); // maßgeblich ist, was Home Assistant wirklich hat
+    await showChecks(res.checks || [], {recheck: () => api.verifyDelete(list, res.forced || [])}, res.errors || []);
+  } else if (planned.length) toast(planned.length + " geplante(s) Gerät(e) entfernt");
+  renderDevices();
 }
 
 /** items: [[device, neuerName], …]. Gibt die Anzahl umbenannter Geräte zurück. */
@@ -1127,13 +1219,13 @@ function renderGateways() {
   const houseOpts = sel => `<option value="">– Standard-Haus –</option>` + S.scheme.houses.map(h => `<option value="${h.id}"${h.id === sel ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("");
   $("#tab-gateways").innerHTML = `<div class="panel" style="margin-bottom:16px"><h2>Gateways</h2>
     <p class="sub" id="basesHint">${S.z2mBases.length ? "Gefundene Zigbee2MQTT-Basis-Topics: <code>" + S.z2mBases.map(b => esc(b.base_topic)).join("</code>, <code>") + "</code>" : ""} <button class="btn" id="detect">Basis-Topics erkennen</button></p>
-    <p class="sub">Je Gateway (Zigbee2MQTT-Instanz, ZHA oder Matter) kannst du einen Namen, den MQTT-Basis-Topic und ein Haus festlegen. Das Haus gilt für alle Geräte dieses Gateways, solange du beim Gerät nichts anderes wählst. „Anlernen“ öffnet das Netz für neue Geräte; Matter-Geräte fügst du wie gewohnt in der Home-Assistant-App hinzu (Gerät hinzufügen → Matter).</p>
+    <p class="sub">Je Gateway (Zigbee2MQTT-Instanz, ZHA oder Matter) kannst du einen Anzeigenamen (optional), den MQTT-Basis-Topic (nur Zigbee2MQTT) und ein Haus festlegen. Das Haus gilt für alle Geräte dieses Gateways, solange du beim Gerät nichts anderes wählst. „Anlernen“ öffnet das Netz für neue Geräte; Matter-Geräte fügst du wie gewohnt in der Home-Assistant-App hinzu (Gerät hinzufügen → Matter).</p>
     <p class="sub">„Z2M-Oberfläche“ ist das Ziel des Knopfs „ⓘ Z2M“ in der Geräteliste. Das Add-on findet sie selbst (Zigbee2MQTT-Add-on, <code>frontend.url</code> aus Z2M); bei mehreren Instanzen hier das passende Add-on auswählen oder eine Adresse wie <code>http://192.168.1.10:8080</code> eintragen.</p>
     <datalist id="z2mUiList">${S.z2mUis.map(u => `<option value="${esc(u.url)}">${esc(u.name)}${u.state && u.state !== "started" ? " (gestoppt)" : ""}</option>`).join("")}</datalist>
     <div class="card"><table><thead><tr><th>Gateway</th><th>Bezeichnung</th><th>Basis-Topic</th><th>Z2M-Oberfläche</th><th>Haus</th><th>Geräte</th><th>Anlernen</th></tr></thead><tbody>
     ${S.bridges.map(b => { const g = S.gateways[b.id] || {}, ui = b.source === "z2m" ? z2mUiOf(b.id) : null, addon = ui && S.z2mUis.find(u => u.url === ui.url);
       return `<tr data-b="${esc(b.id)}"><td>${esc(b.name)}<div class="sub">${b.source === "matter" ? "Matter (Thread/WLAN)" : SOURCE_NAMES[b.source] || b.source}</div></td>
-        <td><input class="gl" value="${esc(g.label || "")}" placeholder="${esc(b.name)}"></td>
+        <td><input class="gl" value="${esc(g.label || "")}" placeholder="${esc(b.name)}" title="Optional: Anzeigename des Gateways in der Geräteliste (Spalte und Filter „Gateway“). Leer = „${esc(b.name)}“"></td>
         <td>${b.source === "z2m" ? `<input class="gt" value="${esc(g.topic || "")}" placeholder="zigbee2mqtt" style="width:150px">` : "–"}</td>
         <td>${b.source === "z2m" ? `<input class="gu" list="z2mUiList" value="${esc(g.ui || "")}" placeholder="${esc(ui?.url || "Add-on wählen oder http://…:8080")}" style="width:200px">
           <div class="sub">${ui ? `${g.ui ? (addon ? "Add-on „" + esc(addon.name) + "“" : "eigene Adresse") : "automatisch: " + esc(ui.how)} · <a class="uiOpen" href="${esc(ui.url)}" target="_blank" rel="noopener">öffnen ↗</a>`
@@ -1606,7 +1698,7 @@ function renderExport() {
 
 const toCsv = rows => { const h = Object.keys(rows[0] || {name: ""}); return [h, ...rows.map(o => h.map(k => o[k] ?? ""))].map(l => l.map(v => `"${String(v).replaceAll('"', '""')}"`).join(";")).join("\n"); };
 const fmtDate = iso => { const d = new Date(iso); return isNaN(d) ? iso || "" : d.toLocaleString("de-DE", {dateStyle: "medium", timeStyle: "short"}); };
-const BACKUP_REASONS = {auto: "nach Änderungen", taeglich: "täglich", manuell: "von Hand", "vor-umbenennen": "vor dem Umbenennen", "vor-raum": "vor dem Raum-Zuweisen", "vor-wiederherstellen": "vor einer Wiederherstellung"};
+const BACKUP_REASONS = {auto: "nach Änderungen", taeglich: "täglich", manuell: "von Hand", "vor-umbenennen": "vor dem Umbenennen", "vor-raum": "vor dem Raum-Zuweisen", "vor-loeschen": "vor dem Löschen", "vor-wiederherstellen": "vor einer Wiederherstellung"};
 
 /** Liste der Sicherungen im Export-Tab. */
 async function renderBackups() {
