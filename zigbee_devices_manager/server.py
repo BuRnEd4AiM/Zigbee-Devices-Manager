@@ -93,14 +93,29 @@ def slugify(text):
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 
-def zigbee_source(device):
-    """Liefert (Quelle, IEEE) für ZHA- oder Zigbee2MQTT-Geräte, sonst None."""
+SOURCE_NAMES = {"zha": "ZHA", "z2m": "Zigbee2MQTT", "matter": "Matter"}
+# Matter-Integration: deviceid_<Fabric>-<Node>-MatterNodeDevice, hinter einer Matter-Bridge -<Endpunkt> statt MatterNodeDevice
+MATTER_ID_RE = re.compile(r"^deviceid_[0-9A-Fa-f]+-([0-9A-Fa-f]+)-(\w+)$")
+
+
+def device_source(device):
+    """Liefert (Quelle, Kennung) für ZHA-, Zigbee2MQTT- und Matter-Geräte, sonst None. Kennung: IEEE bzw. Matter-Geräte-ID."""
     for domain, ident in device.get("identifiers", []):
         if domain == "zha":
             return "zha", ident
         if domain == "mqtt" and ident.startswith("zigbee2mqtt_"):
             return "z2m", ident.removeprefix("zigbee2mqtt_")
+        if domain == "matter" and ident.startswith("deviceid_"):
+            return "matter", ident
     return None
+
+
+def matter_node(ident):
+    """Node-ID und Endpunkt (nur bei Geräten hinter einer Matter-Bridge) aus der Matter-Geräte-ID."""
+    m = MATTER_ID_RE.match(ident)
+    if not m:
+        return None, None
+    return int(m.group(1), 16), int(m.group(2)) if m.group(2).isdigit() else None
 
 
 def load_store():
@@ -119,7 +134,7 @@ def write_json(path, data):
 
 
 def collect_devices(devices, areas):
-    """Zigbee-Geräte (ZHA und Zigbee2MQTT) und ihre Gateways aus der Geräte-Registry."""
+    """Zigbee-Geräte (ZHA und Zigbee2MQTT), Matter-Geräte (Thread/WLAN) und ihre Gateways aus der Geräte-Registry."""
     area_names = {a["area_id"]: a["name"] for a in areas}
     out, bridges = [], {}
     for d in devices:
@@ -128,20 +143,23 @@ def collect_devices(devices, areas):
             bridges[d["id"]] = {"id": d["id"], "source": "z2m", "name": d.get("name_by_user") or d.get("name") or "Zigbee2MQTT",
                                 "ieee": ident.removeprefix("zigbee2mqtt_bridge_"), "config_url": d.get("configuration_url") or ""}
             continue
-        found = zigbee_source(d)
+        found = device_source(d)
         if not found:
             continue
-        source, ieee = found
-        bridge = d.get("via_device_id") or source
+        source, ident = found
+        matter = source == "matter"
+        ieee = "" if matter else ident
+        # Matter: ein gemeinsames Gateway – auch für Geräte hinter einer Matter-Bridge (deren via_device ist die Bridge selbst)
+        bridge = "matter" if matter else d.get("via_device_id") or source
         if bridge not in bridges:
-            bridges.setdefault(bridge, {"id": bridge, "source": source, "name": "ZHA" if source == "zha" else "Zigbee2MQTT"})
+            bridges.setdefault(bridge, {"id": bridge, "source": source, "name": SOURCE_NAMES[source]})
         out.append({
             "bridge": bridge,
             "id": d["id"],
-            "name": d.get("name_by_user") or d.get("name") or ieee,
+            "name": d.get("name_by_user") or d.get("name") or ident,
             "orig_name": d.get("name") or "",
             # Z2M liefert den Friendly-Name als Gerätenamen; neu ist ein Z2M-Gerät nur, solange es noch seine IEEE als Namen trägt
-            "is_new": not d.get("name_by_user") and (source == "zha" or (d.get("name") or "").lower() in ("", ieee.lower())),
+            "is_new": not d.get("name_by_user") and (source != "z2m" or (d.get("name") or "").lower() in ("", ieee.lower())),
             "manufacturer": d.get("manufacturer") or "",
             "model": d.get("model") or "",
             "ieee": ieee,
@@ -151,6 +169,8 @@ def collect_devices(devices, areas):
             # Link zur Geräteseite in der Z2M-Oberfläche – setzt Zigbee2MQTT selbst, wenn dort frontend.url eingetragen ist
             "config_url": d.get("configuration_url") or "",
         })
+        if matter:
+            out[-1]["node"], out[-1]["endpoint"] = matter_node(ident)
     return out, bridges
 
 
@@ -1094,7 +1114,7 @@ async def adopt_z2m_names(items, targets, timeout=15):
     while True:
         found = {}
         for d in (await ha([{"type": "config/device_registry/list"}]))[0]:
-            src = zigbee_source(d)
+            src = device_source(d)
             if src and src[0] == "z2m" and src[1].lower() in by_ieee:
                 found[src[1].lower()] = d
         if all(found.get(k, {}).get("name") == it["name"] for k, it in by_ieee.items()) or time.monotonic() >= deadline:
@@ -1393,7 +1413,9 @@ async def diag(request):
             res = (await ha([cmd]))[0]
             out["steps"].append({"step": name, "ok": True, "count": len(res)})
             if name == "Geräte-Registry":
-                out["zigbee_devices"] = sum(1 for d in res if zigbee_source(d))
+                sources = [s[0] for d in res if (s := device_source(d))]
+                out["zigbee_devices"] = sum(1 for s in sources if s != "matter")
+                out["matter_devices"] = sources.count("matter")
         except web.HTTPException as err:
             out["steps"].append({"step": name, "ok": False, "error": err.text})
     out["config_dir"] = {"path": str(HA_CONFIG_DIR), "exists": HA_CONFIG_DIR.is_dir()}
@@ -1406,8 +1428,8 @@ async def selftest(app):
     class Dummy:  # nur für den Aufruf der Diagnose
         pass
     result = json.loads((await diag(Dummy())).text)
-    log.info("Start: Token=%s, Zigbee-Geräte=%s, Schritte=%s", result["supervisor_token"],
-             result.get("zigbee_devices"), result["steps"])
+    log.info("Start: Token=%s, Zigbee-Geräte=%s, Matter-Geräte=%s, Schritte=%s", result["supervisor_token"],
+             result.get("zigbee_devices"), result.get("matter_devices"), result["steps"])
 
 
 def make_app():

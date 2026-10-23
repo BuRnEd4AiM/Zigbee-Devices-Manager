@@ -1,5 +1,15 @@
 # Änderungen
 
+## 0.10.0
+
+*23.10.2026*
+
+- **Matter-Geräte (Thread/WLAN) in der Geräteliste:** Alle Geräte der Matter-Integration erscheinen jetzt mit – unter dem neuen Gateway „Matter“. So lassen sie sich nach demselben Namensschema benennen wie die Zigbee-Geräte (Haus, Etage, Raum, Typ, laufende Nummer; belegte Namen werden übersprungen).
+- Umbenannt wird in Home Assistant, wie bei ZHA: Gerätename, Entity-IDs, Verweise in Automationen/Dashboards/YAML/Node-RED und Bereich – mit Vorschau und Prüfung.
+- Statt der IEEE zeigt die Liste bei Matter-Geräten die Node-ID (hinter einer Matter-Bridge mit Endpunkt). Die Suche findet „Matter“, der Gateway-Filter zeigt nur Matter-Geräte.
+- Im Tab „Gateways“ lässt sich auch für Matter ein Haus festlegen. Gekoppelt werden Matter-Geräte weiterhin in der Home-Assistant-App.
+- Der Export (CSV/JSON) hat eine neue Spalte „quelle“ (ZHA, Zigbee2MQTT, Matter).
+
 ## 0.9.1
 
 *14.10.2026*
