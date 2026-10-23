@@ -1,5 +1,16 @@
 # Änderungen
 
+## 0.11.0
+
+*24.10.2026*
+
+- **Geräte restlos löschen:** Geräte in der Liste anhaken → „🗑 Löschen“. Funktioniert für Zigbee2MQTT, ZHA und Matter: Das Gerät wird in seiner Bridge entfernt (Zigbee: aus dem Netz abgemeldet; Matter: aus dem Matter-Netz von Home Assistant) und danach samt Entitäten aus Home Assistant gelöscht.
+- Schutz vor Versehen: Die Vorschau zeigt alle betroffenen Geräte und Entitäten, Geräte, die mit verschwinden (z. B. hinter einer Matter-Bridge), und Automationen/Dashboards, die danach ins Leere zeigen. Gelöscht wird erst, wenn man **LÖSCHEN** eintippt.
+- Antwortet ein Zigbee2MQTT-Gerät nicht (z. B. schlafender Batterie-Sensor), wird es auf Wunsch trotzdem aus Z2M entfernt – mit Hinweis, es vor dem erneuten Anlernen zurückzusetzen.
+- Der ZHA-Koordinator lässt sich nicht löschen. Schlägt das Entfernen in Zigbee2MQTT/ZHA fehl, bleibt das Gerät auch in Home Assistant (sonst käme es von dort wieder).
+- Vorher wird gesichert, danach geprüft (mit „Erneut prüfen“). Geplante Geräte lassen sich auf demselben Weg aus der Liste entfernen.
+- Tab „Gateways“: Hinweis, dass die Bezeichnung nur ein optionaler Anzeigename ist.
+
 ## 0.10.0
 
 *23.10.2026*

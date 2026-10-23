@@ -1280,6 +1280,167 @@ async def ha_try(cmd):
         return False, err.text
 
 
+# ---------- Löschen ----------
+async def delete_targets(items):
+    """Entity-IDs je Gerät und die Geräte, die über ein Gerät angebunden sind (via_device: ZHA-Koordinator, Matter-Bridge)."""
+    devices, entities = await ha([{"type": "config/device_registry/list"}, {"type": "config/entity_registry/list"}])
+    ids = {it["device_id"] for it in items}
+    ents, children = {}, {}
+    for e in entities:
+        if e.get("device_id") in ids:
+            ents.setdefault(e["device_id"], []).append(e["entity_id"])
+    for d in devices:
+        if d.get("via_device_id") in ids:
+            children.setdefault(d["via_device_id"], []).append(d.get("name_by_user") or d.get("name") or d["id"])
+    return ents, children
+
+
+def is_coordinator(it, children):
+    """ZHA hängt alle Geräte an den Koordinator (via_device) – den darf das Löschen nie treffen."""
+    return it.get("source") == "zha" and bool(children.get(it["device_id"]))
+
+
+async def plan_delete(request):
+    """Vorschau zum Löschen: Entitäten je Gerät, angebundene Geräte und Automationen/Skripte/Szenen/Dashboards, die die Entitäten nutzen."""
+    items = parse_request(await request.json())
+    ents, children = await delete_targets(items)
+    ids = [e for it in items for e in ents.get(it["device_id"], [])]
+    usages, unreadable, _ = await collect_usages({"update_references": True}, {e: e for e in ids}) if ids else ([], 0, [])
+    return web.json_response({"devices": [{"device_id": it["device_id"], "name": it["name"], "entities": ents.get(it["device_id"], []),
+                                           "children": children.get(it["device_id"], []), "blocked": is_coordinator(it, children)}
+                                          for it in items],
+                              "usages": usages, "unreadable": unreadable})
+
+
+async def remove_in_bridge(it, owners, force):
+    """Entfernt ein Gerät in Zigbee2MQTT bzw. ZHA (Abmelden aus dem Zigbee-Netz); Matter erledigt Home Assistant beim Löschen
+    des Geräts selbst. Liefert (ok, Fehler, erzwungen)."""
+    if it.get("source") == "z2m" and it.get("ieee"):
+        owner = owners.get(it["ieee"].lower())
+        if owners and not owner:
+            return True, None, False  # in keiner Z2M-Instanz (mehr) vorhanden: nur noch Home Assistant aufräumen
+        base = owner["base"] if owner else safe_topic(it.get("base_topic"))
+        forced = False
+        result = await z2m_request(base, "device/remove", {"id": it["ieee"], "force": False}, timeout=30)
+        if result.get("status") not in ("ok", "unknown") and force:
+            # Gerät bestätigt das Abmelden nicht (z. B. schlafender Batterie-Sensor): nur aus der Datenbank von Z2M entfernen
+            forced = True
+            result = await z2m_request(base, "device/remove", {"id": it["ieee"], "force": True}, timeout=15)
+        if result.get("status") not in ("ok", "unknown"):
+            known = await z2m_devices()  # Antwort verpasst, Gerät aber schon weg?
+            if known and it["ieee"].lower() not in known:
+                return True, None, forced
+        failure = await z2m_failure(base, result)
+        return failure is None, failure, forced
+    if it.get("source") == "zha" and it.get("ieee"):
+        ok, res = await ha_try({"type": "call_service", "domain": "zha", "service": "remove", "service_data": {"ieee": it["ieee"]}})
+        return ok, None if ok else f"ZHA: {res}", False
+    return True, None, False
+
+
+async def remove_in_ha(items, timeout=20):
+    """Zigbee2MQTT und ZHA melden entfernte Geräte in HA selbst ab – darauf kurz warten. Was dann noch da ist (bei Matter immer),
+    wird über seine Integration gelöscht (Matter: HA entfernt den Knoten dabei aus seinem Matter-Netz); Entitäten, die danach noch
+    an einem gelöschten Gerät hängen, werden entfernt. Liefert Fehler."""
+    ids = {it["device_id"] for it in items}
+    wait = {it["device_id"] for it in items if it.get("source") in ("z2m", "zha")}
+    deadline = time.monotonic() + (timeout if wait else 0)
+    while True:
+        present = {d["id"]: d for d in (await ha([{"type": "config/device_registry/list"}]))[0] if d["id"] in ids}
+        if not wait & present.keys() or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(1.5)
+    failed = {}
+    for dev in present.values():
+        for entry in dev.get("config_entries") or []:
+            ok, res = await ha_try({"type": "config/device_registry/remove_config_entry", "device_id": dev["id"], "config_entry_id": entry})
+            if not ok:
+                failed[dev["id"]] = res
+    devices, entities = await ha([{"type": "config/device_registry/list"}, {"type": "config/entity_registry/list"}])
+    still = {d["id"] for d in devices}
+    names = {it["device_id"]: it["name"] for it in items}
+    # ein Fehler zählt nur, wenn das Gerät noch da ist (mit dem letzten Eintrag verschwindet es samt der übrigen)
+    errors = [{"device": names[i], "device_id": i, "error": f"Home Assistant: {res}"} for i, res in failed.items() if i in still]
+    for ent in entities:
+        if ent.get("device_id") in ids - still:
+            ok, res = await ha_try({"type": "config/entity_registry/remove", "entity_id": ent["entity_id"]})
+            if not ok:
+                errors.append({"device": ent["entity_id"], "error": res})
+    return errors
+
+
+async def verify_delete(items, forced=()):
+    """Prüft nach dem Löschen, ob Geräte und Entitäten aus Home Assistant und die Geräte aus Zigbee2MQTT verschwunden sind.
+    Liefert (Prüfpunkte, IDs der gelöschten Geräte)."""
+    devices, entities = await ha([{"type": "config/device_registry/list"}, {"type": "config/entity_registry/list"}])
+    present = {d["id"] for d in devices}
+    gone = [it["device_id"] for it in items if it["device_id"] not in present]
+    still = [it["name"] for it in items if it["device_id"] in present]
+    left = [e["entity_id"] for e in entities if e.get("device_id") in set(gone)]
+    checks = [check("Home Assistant", "fail" if still else "ok",
+                    f"Noch vorhanden: {', '.join(still)}" if still else f"{len(items)} Gerät(e) aus Home Assistant gelöscht")]
+    if left:
+        checks.append(check("Entitäten", "fail", f"Noch vorhanden: {', '.join(left)}"))
+    z2m = [it for it in items if it.get("source") == "z2m" and it.get("ieee")]
+    if z2m:
+        known = await z2m_devices()
+        off = [it["name"] for it in z2m if it["ieee"].lower() in known]
+        if not known:
+            checks.append(check("Zigbee2MQTT", "warn", "Geräteliste von Zigbee2MQTT (bridge/devices) nicht lesbar – dort nicht geprüft"))
+        else:
+            checks.append(check("Zigbee2MQTT", "fail" if off else "ok",
+                                f"Noch in Zigbee2MQTT: {', '.join(off)}" if off else f"{len(z2m)} Gerät(e) aus Zigbee2MQTT entfernt"))
+    if forced:
+        checks.append(check("Ohne Abmelden entfernt", "warn", f"{', '.join(forced)} hat das Abmelden nicht bestätigt und wurde nur aus Zigbee2MQTT "
+                                                              "entfernt. Vor dem erneuten Anlernen zurücksetzen, sonst meldet es sich womöglich von selbst wieder."))
+    if any(it.get("source") == "matter" for it in items):
+        checks.append(check("Matter", "info", "Aus dem Matter-Netz von Home Assistant entfernt. Ist das Gerät zusätzlich in Apple Home, "
+                                              "Google Home o. ä. eingebunden, dort separat entfernen."))
+    return checks, gone
+
+
+async def delete_devices(request):
+    """Löscht Geräte restlos: erst in Zigbee2MQTT/ZHA (Abmelden aus dem Netz), dann in Home Assistant samt Entitäten.
+    Bleibt die Bridge erfolglos, bleibt das Gerät auch in HA (sonst käme es von dort wieder). Vorher wird gesichert."""
+    body = await request.json()
+    items = parse_request(body)
+    if not items:
+        raise web.HTTPBadRequest(text="Keine Geräte angegeben")
+    pid = body.get("progress_id")
+    prog_start(pid, len(items) + 3)
+    prog(pid, "Sichere den aktuellen Stand …", 0)
+    await safe_backup("vor-loeschen")
+    _, children = await delete_targets(items)
+    owners = await z2m_devices() if any(it.get("source") == "z2m" for it in items) else {}
+    errors, removed, forced = [], [], []
+    for n, it in enumerate(items, 1):
+        prog(pid, f"Entferne ({n}/{len(items)}): {it['name']}", 0)
+        if is_coordinator(it, children):
+            errors.append({"device": it["name"], "device_id": it["device_id"], "error": "ZHA-Koordinator – wird nicht gelöscht"})
+            continue
+        ok, failure, was_forced = await remove_in_bridge(it, owners, bool(body.get("force")))
+        if ok:
+            removed.append(it)
+            if was_forced:
+                forced.append(it["name"])
+        else:
+            errors.append({"device": it["name"], "device_id": it["device_id"], "error": failure})
+        prog(pid, f"Entfernt ({n}/{len(items)}): {it['name']}")
+    if removed:
+        prog(pid, "Lösche in Home Assistant …")
+        errors += await remove_in_ha(removed)
+    prog(pid, "Prüfe das Ergebnis …")
+    checks, gone = await verify_delete(items, forced)
+    prog_end(pid)
+    return web.json_response({"ok": not errors, "checks": checks, "errors": errors, "deleted": gone, "forced": forced})
+
+
+async def verify_delete_request(request):
+    body = await request.json()
+    checks, gone = await verify_delete(parse_request(body), body.get("forced") or [])
+    return web.json_response({"checks": checks, "deleted": gone})
+
+
 async def apply(request):
     body = await request.json()
     items = parse_request(body)
@@ -1456,6 +1617,9 @@ def make_app():
         web.get("/api/progress", progress),
         web.get("/api/z2m_bases", z2m_bases),
         web.post("/api/assign_area", assign_area),
+        web.post("/api/delete/plan", plan_delete),
+        web.post("/api/delete", delete_devices),
+        web.post("/api/delete/verify", verify_delete_request),
         web.get("/api/z2m_uis", z2m_uis),
         web.get("/api/backups", list_backups),
         web.post("/api/backups", create_backup),
