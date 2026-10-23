@@ -3,12 +3,13 @@
 [![Download demo](https://img.shields.io/badge/%E2%AC%87%EF%B8%8F-Download%20demo-0b7bd6?style=for-the-badge)](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases/download/demo/zigbee-devices-manager-demo.html)
 
 Home Assistant add-on with its own sidebar panel ("Zigbee Namen") to view, edit and assign
-names for all Zigbee devices (ZHA and Zigbee2MQTT) following a fixed naming scheme.
+names for all Zigbee devices (ZHA and Zigbee2MQTT) and Matter devices (e.g. over Thread) following a fixed naming scheme.
 German version: [README.md](README.md)
 
 ## Features
 
 - List of all new and existing Zigbee devices, inline rename, search, "new" filter
+- **Matter devices (Thread/Wi-Fi):** all devices of the Matter integration appear in the list as well – under the gateway "Matter", with their node ID instead of an IEEE (plus the endpoint for devices behind a Matter bridge). They use the same naming scheme, house/floor/room/type and running numbers as the Zigbee devices; renaming happens in Home Assistant (`name_by_user`), including entity IDs, references and area. A Matter device counts as new as long as it has no custom name in HA. Matter devices are still paired in the Home Assistant app.
 - **Configurable naming scheme**, e.g. `{room}_{type}_{nr}` → `WZ_LP_01`
   - Abbreviations for rooms and device types, selectable per device
   - Automatic counter per room+type that skips names already in use
@@ -31,7 +32,7 @@ German version: [README.md](README.md)
 - **House prefix:** patterns with `{house}`, e.g. `{house}-{room}-{type}{nr}` → `H1-wzfl-lband01`. Houses, rooms and types with their own abbreviations, a default house plus per-device choice
 - Multi-select → assign room/type → "apply suggestions"
 - **Verification after renaming:** the add-on re-reads Home Assistant and shows ✅/⚠️/❌ for device names (up to 15 s wait for Z2M), entity IDs and leftover old references in automations, YAML and Node-RED. "Re-check" reads again.
-- **Multiple gateways/houses:** the "Gateways" tab lists every Zigbee2MQTT instance (and ZHA). Per gateway: label, MQTT base topic and house (applied to its devices automatically). Gateway filter in the device list.
+- **Multiple gateways/houses:** the "Gateways" tab lists every Zigbee2MQTT instance (and ZHA, Matter). Per gateway: label, MQTT base topic and house (applied to its devices automatically). Gateway filter in the device list.
 - **Pairing:** "4 Min anlernen" in the "Gateways" tab opens the network (Z2M via `bridge/request/permit_join`, ZHA via `zha.permit`), "Stopp" ends it; status with countdown.
 - **Rename many at once:** tick devices → assign house/room/type → "apply selected suggestions" (no selection: all visible)
 - Planned devices reserve names/numbers

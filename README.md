@@ -5,12 +5,13 @@
 English version: [README.en.md](README.en.md)
 
 Home-Assistant-Add-on mit eigener Seitenleisten-Spalte („Zigbee Namen“), in der du die Namen
-aller Zigbee-Geräte (ZHA und Zigbee2MQTT) siehst, bearbeitest und nach einem festen
-Namensschema vergibst.
+aller Zigbee-Geräte (ZHA und Zigbee2MQTT) und Matter-Geräte (z. B. über Thread) siehst, bearbeitest
+und nach einem festen Namensschema vergibst.
 
 ## Funktionen
 
 - Liste aller neuen und bestehenden Zigbee-Geräte, Inline-Umbenennen, Suche, Filter „Neu“
+- **Matter-Geräte (Thread/WLAN):** Alle Geräte der Matter-Integration stehen mit in der Liste – unter dem Gateway „Matter“, mit Node-ID statt IEEE (hinter einer Matter-Bridge zusätzlich der Endpunkt). Sie bekommen dasselbe Namensschema, Haus/Etage/Raum/Typ und laufende Nummern wie die Zigbee-Geräte; umbenannt wird in Home Assistant (`name_by_user`), samt Entity-IDs, Verweisen und Bereich. Neu ist ein Matter-Gerät, solange es in HA keinen eigenen Namen hat. Gekoppelt werden Matter-Geräte weiterhin in der Home-Assistant-App.
 - **Namensschema** frei konfigurierbar, z. B. `{room}_{type}_{nr}` → `WZ_LP_01`
   - Kürzel für Räume und Gerätetypen zum Auswählen
   - Automatisches Hochzählen je Raum+Typ, überspringt belegte Namen
@@ -33,7 +34,7 @@ Namensschema vergibst.
 - **Haus-Präfix:** Muster mit `{house}`, z. B. `{house}-{room}-{type}{nr}` → `H1-wzfl-lband01`. Häuser, Räume und Typen mit eigenen Kürzeln (Groß-/Kleinschreibung wählbar), Standard-Haus plus Auswahl je Gerät
 - Mehrfachauswahl → Raum/Typ zuweisen → „Vorschläge übernehmen“
 - **Prüfung nach dem Umbenennen:** Das Add-on liest den Stand aus Home Assistant neu ein und zeigt ✅/⚠️/❌ für Gerätenamen (bei Z2M mit bis zu 15 s Wartezeit), Entity-IDs und verbliebene alte Verweise in Automationen, YAML und Node-RED. „Erneut prüfen“ liest erneut nach.
-- **Mehrere Gateways/Häuser:** Tab „Gateways“ listet jede Zigbee2MQTT-Instanz (und ZHA). Je Gateway: Bezeichnung, MQTT-Basis-Topic und Haus (gilt automatisch für dessen Geräte). In der Geräteliste Filter nach Gateway.
+- **Mehrere Gateways/Häuser:** Tab „Gateways“ listet jede Zigbee2MQTT-Instanz (und ZHA, Matter). Je Gateway: Bezeichnung, MQTT-Basis-Topic und Haus (gilt automatisch für dessen Geräte). In der Geräteliste Filter nach Gateway.
 - **Anlernen:** Im Tab „Gateways“ öffnet „4 Min anlernen“ das Netz (Z2M per `bridge/request/permit_join`, ZHA per `zha.permit`), „Stopp“ beendet es; Status mit Countdown.
 - **Mehrere Geräte auf einmal:** Häkchen setzen → Haus/Raum/Typ zuweisen → „ausgewählte Vorschläge übernehmen“ (ohne Auswahl: alle sichtbaren)
 - Geplante Geräte reservieren Namen/Nummern

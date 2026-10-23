@@ -112,7 +112,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 </main>
 <div class="toast" id="toast"></div>
 
-<script src="zigbee-tree.js?v=0.9.1"></script>
+<script src="zigbee-tree.js?v=0.10.0"></script>
 <script>
 // ---------- Konfiguration / Standarddaten ----------
 const DEMO_FORCED = window.ZDM_DEMO === true;
@@ -140,7 +140,7 @@ const DEFAULT_SCHEME = {
 
 const DEMO_FLOORS = [{id: "fl_eg", name: "Erdgeschoss", level: 0}, {id: "fl_og", name: "Obergeschoss", level: 1}, {id: "fl_ug", name: "Untergeschoss", level: -1}];
 const DEMO_AREAS = [["Wohnzimmer", "fl_eg"], ["Küche", "fl_eg"], ["Flur", "fl_eg"], ["Schlafzimmer", "fl_og"], ["Bad", "fl_og"], ["Büro", "fl_og"], ["Terrasse", "fl_eg"], ["Keller", "fl_ug"]].map(([n, f]) => ({id: "area_" + n.toLowerCase().replace("ü", "ue"), name: n, floor_id: f}));
-const DEMO_BRIDGES = [{id: "b1", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 1)", config_url: "http://192.168.1.20:8080/#/settings"}, {id: "b2", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 2)"}];
+const DEMO_BRIDGES = [{id: "b1", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 1)", config_url: "http://192.168.1.20:8080/#/settings"}, {id: "b2", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 2)"}, {id: "matter", source: "matter", name: "Matter"}];
 const DEMO_UIS = [{slug: "45df7312_zigbee2mqtt", name: "Zigbee2MQTT", url: "/api/hassio_ingress/demo-z2m-1/", state: "started"}, {slug: "45df7312_zigbee2mqtt_edge", name: "Zigbee2MQTT Edge", url: "/api/hassio_ingress/demo-z2m-2/", state: "started"}];
 const DEMO_DEVICES = [
   ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0001", "Wohnzimmer", "Wohnzimmer Stehlampe"],
@@ -159,12 +159,23 @@ const DEMO_DEVICES = [
   ["Zigbee Coordinator", "Texas Instruments", "CC2652P", "0x00124b0030aa0000", "", "Koordinator"]
 ].map((d, i) => ({id: "demo" + i, source: "z2m", bridge: i < 8 ? "b1" : "b2", orig_name: d[0], manufacturer: d[1], model: d[2], ieee: d[3], area: d[4],
   is_new: !d[5], name: d[5] || d[3], area_id: d[4] ? "area_" + d[4].toLowerCase().replace("ü", "ue") : "", config_url: i < 8 ? "http://192.168.1.20:8080/#/device/0/" + d[3] + "/info" : ""}));
+// Matter-Geräte (über Thread oder WLAN): gemeinsames Gateway „Matter“, Kennung ist die Node-ID (hinter einer Matter-Bridge mit Endpunkt)
+const DEMO_MATTER = [
+  ["Eve Energy", "Eve Systems", "Eve Energy 20EBO8301", 3, null, "Küche", null],
+  ["Nanoleaf Essentials A19", "Nanoleaf", "NL67", 4, null, "Wohnzimmer", "WZ_LP_02"],
+  ["Eve Door & Window", "Eve Systems", "Eve Door & Window 20EBN9901", 5, null, "Flur", null],
+  ["Eve Thermo", "Eve Systems", "Eve Thermo 20EBP1701", 6, null, "Schlafzimmer", null],
+  ["Aqara Motion and Light Sensor P2", "Aqara", "MS-S02", 7, null, "", null],
+  ["Hue color lamp", "Signify Netherlands B.V.", "LCA001", 8, 11, "Büro", null]
+].map((d, i) => ({id: "demoM" + i, source: "matter", bridge: "matter", orig_name: d[0], manufacturer: d[1], model: d[2], ieee: "", node: d[3], endpoint: d[4], area: d[5],
+  is_new: !d[6], name: d[6] || d[0], area_id: d[5] ? "area_" + d[5].toLowerCase().replace("ü", "ue") : "", config_url: ""}));
 
 // ---------- Hilfsfunktionen ----------
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const uid = p => p + Math.random().toString(36).slice(2, 8);
 const clone = o => JSON.parse(JSON.stringify(o));
+const SOURCE_NAMES = {zha: "ZHA", z2m: "Zigbee2MQTT", matter: "Matter"};
 
 function toast(msg) {
   const t = $("#toast"); t.textContent = msg; t.classList.add("show");
@@ -218,7 +229,7 @@ const api = {
     }
     let store = {};
     try { store = JSON.parse(localStorage.getItem("zdm-demo-store") || "{}"); } catch (e) {}
-    let devices = clone(DEMO_DEVICES);
+    let devices = clone([...DEMO_DEVICES, ...DEMO_MATTER]);
     try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); devices.forEach(d => { if (n[d.id]) { d.name = n[d.id]; d.is_new = false; } }); } catch (e) {}
     return {devices, store, bridges: DEMO_BRIDGES, areas: DEMO_AREAS, floors: DEMO_FLOORS};
   },
@@ -409,6 +420,8 @@ function syncAreas() {
 }
 const typeOf = d => S.scheme.types.find(t => t.id === S.meta[d.id]?.type);
 const gwOf = d => S.gateways[d.bridge] || {};
+/** Kennung des Geräts: IEEE bei Zigbee, Node-ID (hinter einer Matter-Bridge mit Endpunkt) bei Matter. */
+const addrOf = d => d.source !== "matter" ? d.ieee || "" : d.node == null ? "" : "Node " + d.node + (d.endpoint == null ? "" : " · Endpunkt " + d.endpoint);
 const houseOf = d => S.scheme.houses.find(h => h.id === (S.meta[d.id]?.house || gwOf(d).house || S.scheme.defaultHouse));
 const useHouse = () => S.scheme.pattern.includes("{house}");
 const useFloor = () => S.scheme.pattern.includes("{floor}");
@@ -471,7 +484,7 @@ function openLinks(d) {
     out += url ? `<a class="lnk z2m" href="${esc(url)}" target="_blank" rel="noopener" title="Gerät in Zigbee2MQTT öffnen: Info, MQTT-Topic, Exposes, Einstellungen">ⓘ Z2M</a>`
       : `<span class="lnk off" title="Adresse der Zigbee2MQTT-Oberfläche unbekannt – im Tab „Gateways“ bei „Z2M-Oberfläche“ eintragen (Klick öffnet den Tab)">ⓘ Z2M</span>`;
   }
-  return out + `<a class="lnk ha" href="${esc(haDevicePath(d))}" target="_top" title="Gerät in Home Assistant öffnen: Entitäten, Bereich, MQTT-Info">⌂ HA</a>`;
+  return out + `<a class="lnk ha" href="${esc(haDevicePath(d))}" target="_top" title="Gerät in Home Assistant öffnen: Entitäten, Bereich, ${d.source === "matter" ? "Matter-Info (Netzwerk, Thread)" : "MQTT-Info"}">⌂ HA</a>`;
 }
 const showTab = name => document.querySelector(`nav button[data-tab="${name}"]`).click();
 
@@ -590,7 +603,7 @@ function renderDevices() {
     if (S.filter === "planned" && !d.planned) return false;
     if (S.filter === "odd" && (d.is_new || d.planned || parseName(d.name))) return false;
     if (S.gwFilter && d.bridge !== S.gwFilter) return false;
-    return !q || [d.name, d.orig_name, d.ieee, d.model, d.manufacturer, d.area].join(" ").toLowerCase().includes(q);
+    return !q || [d.name, d.orig_name, addrOf(d), d.model, d.manufacturer, d.area, SOURCE_NAMES[d.source]].join(" ").toLowerCase().includes(q);
   });
   const roomOpts = sel => `<option value="">–</option>` + S.scheme.rooms.map(r => `<option value="${r.id}"${r.id === sel ? " selected" : ""}>${esc(r.abbr)} · ${esc(r.name)}</option>`).join("");
   const houseOpts = sel => `<option value="">–</option>` + S.scheme.houses.map(h => `<option value="${h.id}"${h.id === sel ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("");
@@ -629,7 +642,7 @@ function renderDevices() {
     </div>
     <div class="card"><table>
       <thead><tr><th><input type="checkbox" id="selAll" ${rows.length && rows.every(d => S.sel.has(d.id)) ? "checked" : ""}></th>
-        <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Gateway</th>" : ""}<th>Haus</th><th>Etage</th><th>Raum</th><th>Typ</th><th class="hide-s hide-l">Gerät</th><th class="hide-s hide-m">IEEE</th><th>Status</th><th>Öffnen</th><th></th></tr></thead>
+        <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Gateway</th>" : ""}<th>Haus</th><th>Etage</th><th>Raum</th><th>Typ</th><th class="hide-s hide-l">Gerät</th><th class="hide-s hide-m">${S.devices.some(d => d.source === "matter") ? "IEEE / Node" : "IEEE"}</th><th>Status</th><th>Öffnen</th><th></th></tr></thead>
       <tbody>${rows.map(d => {
         const s = sug.get(d.id), r = roomOf(d), t = typeOf(d);
         const nameCell = S.editing === d.id
@@ -645,7 +658,7 @@ function renderDevices() {
           <td><select class="room">${roomOpts(r?.id)}</select></td>
           <td><select class="type">${typeOpts(t?.id)}</select></td>
           <td class="hide-s hide-l">${esc(d.manufacturer)}<div class="sub">${esc(d.model || d.orig_name)}</div></td>
-          <td class="hide-s hide-m"><code>${esc(d.ieee || "–")}</code></td>
+          <td class="hide-s hide-m"><code>${esc(addrOf(d) || "–")}</code></td>
           <td><span class="badge ${d.planned ? "plan" : d.is_new ? "new" : "ok"}">${d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}</span></td>
           <td><div class="links">${openLinks(d)}</div></td>
           <td>${s && s !== d.name ? `<button class="btn apply">Übernehmen</button>` : ""}${d.planned ? `<button class="x delP" title="Entfernen">✕</button>` : ""}</td>
@@ -888,12 +901,12 @@ function renderGateways() {
   const houseOpts = sel => `<option value="">– Standard-Haus –</option>` + S.scheme.houses.map(h => `<option value="${h.id}"${h.id === sel ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("");
   $("#tab-gateways").innerHTML = `<div class="panel" style="margin-bottom:16px"><h2>Gateways</h2>
     <p class="sub" id="basesHint">${S.z2mBases.length ? "Gefundene Zigbee2MQTT-Basis-Topics: <code>" + S.z2mBases.map(b => esc(b.base_topic)).join("</code>, <code>") + "</code>" : ""} <button class="btn" id="detect">Basis-Topics erkennen</button></p>
-    <p class="sub">Je Gateway (Zigbee2MQTT-Instanz oder ZHA) kannst du einen Namen, den MQTT-Basis-Topic und ein Haus festlegen. Das Haus gilt für alle Geräte dieses Gateways, solange du beim Gerät nichts anderes wählst. „Anlernen“ öffnet das Netz für neue Geräte.</p>
+    <p class="sub">Je Gateway (Zigbee2MQTT-Instanz, ZHA oder Matter) kannst du einen Namen, den MQTT-Basis-Topic und ein Haus festlegen. Das Haus gilt für alle Geräte dieses Gateways, solange du beim Gerät nichts anderes wählst. „Anlernen“ öffnet das Netz für neue Geräte; Matter-Geräte fügst du wie gewohnt in der Home-Assistant-App hinzu (Gerät hinzufügen → Matter).</p>
     <p class="sub">„Z2M-Oberfläche“ ist das Ziel des Knopfs „ⓘ Z2M“ in der Geräteliste. Das Add-on findet sie selbst (Zigbee2MQTT-Add-on, <code>frontend.url</code> aus Z2M); bei mehreren Instanzen hier das passende Add-on auswählen oder eine Adresse wie <code>http://192.168.1.10:8080</code> eintragen.</p>
     <datalist id="z2mUiList">${S.z2mUis.map(u => `<option value="${esc(u.url)}">${esc(u.name)}${u.state && u.state !== "started" ? " (gestoppt)" : ""}</option>`).join("")}</datalist>
     <div class="card"><table><thead><tr><th>Gateway</th><th>Bezeichnung</th><th>Basis-Topic</th><th>Z2M-Oberfläche</th><th>Haus</th><th>Geräte</th><th>Anlernen</th></tr></thead><tbody>
     ${S.bridges.map(b => { const g = S.gateways[b.id] || {}, ui = b.source === "z2m" ? z2mUiOf(b.id) : null, addon = ui && S.z2mUis.find(u => u.url === ui.url);
-      return `<tr data-b="${esc(b.id)}"><td>${esc(b.name)}<div class="sub">${b.source === "zha" ? "ZHA" : "Zigbee2MQTT"}</div></td>
+      return `<tr data-b="${esc(b.id)}"><td>${esc(b.name)}<div class="sub">${b.source === "matter" ? "Matter (Thread/WLAN)" : SOURCE_NAMES[b.source] || b.source}</div></td>
         <td><input class="gl" value="${esc(g.label || "")}" placeholder="${esc(b.name)}"></td>
         <td>${b.source === "z2m" ? `<input class="gt" value="${esc(g.topic || "")}" placeholder="zigbee2mqtt" style="width:150px">` : "–"}</td>
         <td>${b.source === "z2m" ? `<input class="gu" list="z2mUiList" value="${esc(g.ui || "")}" placeholder="${esc(ui?.url || "Add-on wählen oder http://…:8080")}" style="width:200px">
@@ -901,7 +914,8 @@ function renderGateways() {
             : S.z2mUis.length ? "bitte Add-on auswählen" : "nicht gefunden"}</div>` : "–"}</td>
         <td><select class="gh">${houseOpts(g.house)}</select></td>
         <td>${S.devices.filter(d => d.bridge === b.id).length}</td>
-        <td><span class="badge" data-cd="${esc(b.id)}"></span> <button class="btn pj" data-t="240">4 Min anlernen</button> <button class="btn pj" data-t="0">Stopp</button></td></tr>`; }).join("") || `<tr><td colspan="6" class="empty">Keine Gateways gefunden.</td></tr>`}
+        <td>${b.source === "matter" ? `<span class="sub" title="Matter-Geräte werden mit ihrem QR-Code in der Home-Assistant-App gekoppelt">in der HA-App</span>`
+          : `<span class="badge" data-cd="${esc(b.id)}"></span> <button class="btn pj" data-t="240">4 Min anlernen</button> <button class="btn pj" data-t="0">Stopp</button>`}</td></tr>`; }).join("") || `<tr><td colspan="6" class="empty">Keine Gateways gefunden.</td></tr>`}
     </tbody></table></div></div>`;
   const root = $("#tab-gateways");
   $("#detect", root).onclick = async () => { S.z2mUis = await api.z2mUis().catch(() => S.z2mUis); const n = await detectBases(); toast(n ? n + " Basis-Topic(s) erkannt" : (S.z2mBases.length ? "Keine neuen Zuordnungen (Topics siehe oben, im Feld eintragen)" : "Keine Zigbee2MQTT-Instanz über MQTT gefunden")); renderGateways(); };
@@ -1340,7 +1354,7 @@ function renderExport() {
         <input type="file" id="bkFile" accept="application/json" hidden></div>
       <div id="bkBox"><p class="sub">Lade Sicherungen …</p></div></div>
   </div>`;
-  const rows = () => allRows().map(d => ({name: d.name, ieee: d.ieee, hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area, haus: houseOf(d)?.name || "", etage: floorOf(d)?.name || "", raum: roomOf(d)?.name || "", typ: typeOf(d)?.name || "", status: d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}));
+  const rows = () => allRows().map(d => ({name: d.name, ieee: d.ieee, quelle: SOURCE_NAMES[d.source] || "", hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area, haus: houseOf(d)?.name || "", etage: floorOf(d)?.name || "", raum: roomOf(d)?.name || "", typ: typeOf(d)?.name || "", status: d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}));
   $("#csv").onclick = () => download("zigbee-geraete.csv", toCsv(rows()), "text/csv");
   $("#json").onclick = () => download("zigbee-geraete.json", JSON.stringify(rows(), null, 2), "application/json");
   $("#sExp").onclick = () => download("namensschema.json", JSON.stringify(S.scheme, null, 2), "application/json");
@@ -1392,7 +1406,7 @@ async function renderBackups() {
 /** Geräteliste einer Sicherung mit den damaligen Zuordnungen. */
 function backupRows(b) {
   const sc = b.store?.scheme || {}, meta = b.store?.meta || {}, nm = (list, id) => (list || []).find(x => x.id === id)?.name || "";
-  return (b.devices || []).map(d => ({name: d.name, ieee: d.ieee, quelle: d.source === "zha" ? "ZHA" : "Zigbee2MQTT", hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area,
+  return (b.devices || []).map(d => ({name: d.name, ieee: d.ieee, quelle: SOURCE_NAMES[d.source] || d.source || "", hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area,
     haus: nm(sc.houses, meta[d.id]?.house), etage: nm(sc.floors, meta[d.id]?.floor), raum: nm(sc.rooms, meta[d.id]?.room), typ: nm(sc.types, meta[d.id]?.type)}));
 }
 async function restoreBackup(payload, label) {
@@ -1422,7 +1436,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   S.storeLoaded = !api.error;
   if (api.error) $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--new)"><b>Verbindung zu Home Assistant fehlgeschlagen.</b> Das Add-on läuft, kann aber keine Geräte laden – keine Demo-Daten.<br><code>${esc(api.error)}</code><br><button class="btn" style="margin-top:8px" onclick="location.reload()">Erneut versuchen</button> <a href="api/diag" target="_blank">Diagnose öffnen</a> <span class="sub">(Details auch im Add-on-Log)</span></div>`;
   else if (data.restored) $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--ok)"><b>Einstellungen wiederhergestellt.</b> Es waren keine gespeicherten Einstellungen vorhanden (z. B. nach einer Neuinstallation) – das Add-on hat den Stand vom ${esc(fmtDate(data.restored.created))} zurückgeholt (${esc(data.restored.source)}). Ältere Stände: Tab „Export“ → Sicherungen.</div>`;
-  else if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee-Geräte geladen und umbenannt.</div>`;
+  else if (api.demo) $("#banner").innerHTML = `<div class="banner"><b>Demo-Modus:</b> Beispieldaten, Änderungen bleiben nur in diesem Browser (localStorage). Im Home-Assistant-Add-on werden echte Zigbee- und Matter-Geräte geladen und umbenannt.</div>`;
   S.scheme.floors = S.scheme.floors || clone(DEFAULT_SCHEME.floors); S.scheme.defaultFloor = S.scheme.defaultFloor || "";
   syncFloors(); syncAreas();
   syncFromNames(false); // Geräte ohne eigene Auswahl: Zuordnung aus dem vorhandenen Namen
