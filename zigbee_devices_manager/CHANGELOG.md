@@ -1,5 +1,14 @@
 # Änderungen
 
+## 0.16.0
+
+*25.10.2026*
+
+- **Neu: „💡 Neu zuordnen“ – vertauscht eingebaute Spots ohne Ausbauen richtig benennen.** Geräte auswählen (z. B. per Filter Raum + Typ), „💡 Neu zuordnen“: Die Geräte blinken nacheinander, je Gerät wählst du den Namen des Platzes, an dem es blinkt. Wählst du einen Namen, den ein anderes Gerät hat, tauschen die beiden – so geht der Tausch zweier Namen genauso wie ein Ringtausch über mehrere Spots. Die Vorschau zeigt die neuen Namen und Entity-IDs.
+- Gerätename, Zigbee2MQTT-Name, Entity-IDs, Haus/Etage/Raum/Typ und (mit „Raum als Bereich in HA setzen“) der Bereich wechseln mit dem Namen. **Automationen, Szenen und Dashboards bleiben unverändert** – sie steuern danach das Gerät, das wirklich an diesem Platz hängt.
+- Ausgeführt wird über Zwischennamen (erst alle auf „…-tausch“, dann auf den neuen Namen), damit nichts kollidiert; geht der erste Schritt schief, wird er zurückgenommen. Vorher wird gesichert, danach geprüft. Hat sich ein Name inzwischen in Home Assistant geändert, bricht das Add-on ab und bittet ums Neu-Laden.
+- **„💡“ je Gerät** in der Liste: lässt das Gerät blinken – über den Identifizieren-Knopf (Matter, ZHA), bei Zigbee2MQTT über den Effekt „blink“ (ändert den Zustand nicht), sonst kurzes Aufblinken der Lampe.
+
 ## 0.15.0
 
 *25.10.2026*

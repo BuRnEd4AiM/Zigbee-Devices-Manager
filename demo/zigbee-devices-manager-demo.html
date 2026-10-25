@@ -563,6 +563,28 @@ const api = {
     }
     const r = await fetch("api/references"); if (!r.ok) throw new Error(await r.text()); return r.json();
   },
+  // ---- Blinken und Neu-Zuordnen (Namen tauschen) ----
+  async identify(d) {
+    if (this.demo) { await new Promise(r => setTimeout(r, 300)); return {ok: true, how: "Demo"}; }
+    return this.post("api/identify", {device_id: d.id, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || ""});
+  },
+  async reassignPlan(items) {
+    if (this.demo) {
+      const slug = t => t.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+      return {skipped: [], areas: items.filter(i => i.area_id && i.area_id !== i.current_area_id).map(i => ({device: i.old_name, from: i.current_area, to: i.area_name})),
+        entities: items.flatMap(i => [["light", ""], ["button", "_identify"]].map(([dom, suf]) => ({old: `${dom}.${slug(i.old_name)}${suf}`, new: `${dom}.${slug(i.name)}${suf}`})))};
+    }
+    return this.post("api/reassign/plan", {items});
+  },
+  async reassign(items, progressId) {
+    if (this.demo) {
+      try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); items.forEach(i => n[i.device_id] = i.name); localStorage.setItem("zdm-demo-names", JSON.stringify(n)); } catch (e) {}
+      await new Promise(r => setTimeout(r, 2000));
+      return {ok: true, errors: [], done: items.map(i => i.device_id), renamed_entities: [], checks: [{name: "Gerätenamen", status: "ok", detail: items.length + " Gerät(e) heißen jetzt wie geplant (Demo)"},
+        {name: "Verweise", status: "info", detail: "Automationen, Szenen und Dashboards sind unverändert – sie steuern jetzt das Gerät, das so heißt"}]};
+    }
+    return this.post("api/reassign", {items, rename_z2m: S.renameZ2m, set_area: S.setArea, progress_id: progressId});
+  },
   async removeFromScenes(ids) {
     if (this.demo) {
       try { const f = JSON.parse(localStorage.getItem("zdm-demo-refs") || "[]"); localStorage.setItem("zdm-demo-refs", JSON.stringify([...f, ...ids])); } catch (e) {}
@@ -814,7 +836,8 @@ function openLinks(d) {
     out += url ? `<a class="lnk z2m" href="${esc(url)}" target="_blank" rel="noopener" title="Gerät in Zigbee2MQTT öffnen: Info, MQTT-Topic, Exposes, Einstellungen">ⓘ Z2M</a>`
       : `<span class="lnk off" title="Adresse der Zigbee2MQTT-Oberfläche unbekannt – im Tab „Gateways“ bei „Z2M-Oberfläche“ eintragen (Klick öffnet den Tab)">ⓘ Z2M</span>`;
   }
-  return out + `<a class="lnk ha" href="${esc(haDevicePath(d))}" target="_top" title="Gerät in Home Assistant öffnen: Entitäten, Bereich, ${d.source === "matter" ? "Matter-Info (Netzwerk, Thread)" : "MQTT-Info"}">⌂ HA</a>`;
+  return out + `<a class="lnk ha" href="${esc(haDevicePath(d))}" target="_top" title="Gerät in Home Assistant öffnen: Entitäten, Bereich, ${d.source === "matter" ? "Matter-Info (Netzwerk, Thread)" : "MQTT-Info"}">⌂ HA</a>`
+    + `<button type="button" class="lnk blink" title="Gerät blinken lassen – zeigt, welches es an der Decke ist">💡</button>`;
 }
 const showTab = name => document.querySelector(`nav button[data-tab="${name}"]`).click();
 
@@ -984,6 +1007,7 @@ function renderDevices() {
       <select id="bType">${typeOpts("")}</select>
       <button class="btn" id="bAssign" ${S.sel.size ? "" : "disabled"}>Zuweisen</button>
       <button class="btn" id="bArea" ${S.sel.size ? "" : "disabled"} title="Ordnet die ausgewählten Geräte ihrem gewählten Raum in Home Assistant zu – ohne sie umzubenennen">Raum in HA setzen</button>
+      <button class="btn" id="bSwap" ${rows.filter(d => S.sel.has(d.id) && !d.planned && !d.is_new).length >= 2 ? "" : "disabled"} title="Für vertauscht eingebaute Spots: Die ausgewählten Geräte blinken nacheinander, du wählst jeweils den richtigen Namen. Namen, Entity-IDs und Raum wechseln mit – Automationen, Szenen und Dashboards bleiben beim Namen und steuern danach den richtigen Platz.">💡 Neu zuordnen</button>
       <button class="btn" id="bDel" ${S.sel.size ? "" : "disabled"} title="Löscht die ausgewählten Geräte restlos – in Zigbee2MQTT, ZHA bzw. Matter und in Home Assistant (mit Vorschau und Bestätigung)">🗑 Löschen</button>
       <span style="flex:1"></span>
       <label class="sub" title="Ordnet das Gerät in Home Assistant dem gewählten Raum (Bereich) zu; fehlende Bereiche werden angelegt"><input type="checkbox" id="rArea" ${S.setArea ? "checked" : ""}> Raum als Bereich in HA setzen</label>
@@ -1050,6 +1074,7 @@ function renderDevices() {
   };
   $("#bArea", root).onclick = () => assignAreas(rows.filter(d => S.sel.has(d.id)));
   $("#bDel", root).onclick = () => deleteDevices(rows.filter(d => S.sel.has(d.id)));
+  $("#bSwap", root).onclick = () => reassignWizard(rows.filter(d => S.sel.has(d.id)));
   $("#bAssign", root).onclick = () => {
     const room = $("#bRoom", root).value, type = $("#bType", root).value, house = $("#bHouse", root)?.value, floor = $("#bFloor", root)?.value;
     rows.filter(d => S.sel.has(d.id)).forEach(({id}) => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type}), ...(house && {house}), ...(floor && {floor})}; });
@@ -1072,6 +1097,7 @@ function renderDevices() {
     $(".fixIds", tr) && ($(".fixIds", tr).onclick = () => fixEntityIds([d]));
     $(".dupIds", tr) && ($(".dupIds", tr).onclick = () => resolveDuplicates([d]));
     $(".lnk.ha", tr) && ($(".lnk.ha", tr).onclick = e => haNavigate(e, haDevicePath(d)));
+    $(".lnk.blink", tr) && ($(".lnk.blink", tr).onclick = async () => { try { const r = await api.identify(d); toast(`💡 ${d.name} blinkt (${r.how})`); } catch (e) { toast("Blinken nicht möglich: " + e.message); } });
     $(".lnk.z2m", tr) && ($(".lnk.z2m", tr).onclick = e => openZ2m(e, z2mLink(d)));
     $(".lnk.off", tr) && ($(".lnk.off", tr).onclick = () => showTab("gateways"));
     $(".apply", tr) && ($(".apply", tr).onclick = async () => { if (await applyBatch([[d, sug.get(d.id)]])) toast("Name übernommen"); renderDevices(); });
@@ -1401,6 +1427,95 @@ async function checkReferences() {
   const load = async () => { draw(null); try { draw(await api.checkRefs()); } catch (e) { close(); toast("Prüfen fehlgeschlagen: " + e.message); } };
   document.body.appendChild(dlg); dlg.showModal(); dlg.oncancel = close;
   await load();
+}
+
+/** „💡 Neu zuordnen“ für vertauscht eingebaute Geräte (z. B. Spots): Die ausgewählten Geräte blinken nacheinander, je Gerät
+ *  wählt man den Namen des Platzes, an dem es blinkt. Wählt man einen Namen, den ein anderes Gerät hat, tauschen die beiden –
+ *  so bleibt es immer eine gültige Zuordnung (Tausch oder Ringtausch). Danach Vorschau und Ausführung über den Server.
+ *  Automationen, Szenen und Dashboards bleiben beim Namen und steuern danach das Gerät, das am richtigen Platz so heißt. */
+async function reassignWizard(sel) {
+  const devs = sel.filter(d => !d.planned && !d.is_new);
+  if (devs.length < 2) { toast("Mindestens 2 benannte Geräte auswählen"); return; }
+  const byNameNat = (a, b) => a.localeCompare(b, "de", {numeric: true});
+  const names = devs.map(d => d.name).sort(byNameNat), assign = new Map(devs.map(d => [d.id, d.name]));
+  const ownerOf = name => devs.find(d => d.name === name); // wer den Namen bisher trägt
+  const dlg = document.createElement("dialog");
+  dlg.style.cssText = "max-width:640px;width:94%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
+  const close = () => { dlg.close(); dlg.remove(); };
+  document.body.appendChild(dlg); dlg.showModal(); dlg.oncancel = close;
+  let i = 0, note = "";
+  const blink = async () => {
+    const st = $("#blinkSt", dlg); if (st) st.textContent = "💡 lasse blinken …";
+    try { const r = await api.identify(devs[i]); if ($("#blinkSt", dlg)) $("#blinkSt", dlg).textContent = `💡 blinkt jetzt (${r.how})`; }
+    catch (e) { if ($("#blinkSt", dlg)) $("#blinkSt", dlg).textContent = "⚠ Blinken nicht möglich: " + e.message; }
+  };
+  const step = () => {
+    const d = devs[i], cur = assign.get(d.id);
+    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">💡 Neu zuordnen – Gerät ${i + 1} von ${devs.length}</h2>
+      <p class="sub">Schau, welcher Spot blinkt, und wähle den Namen, der zu diesem Platz gehört. Wählst du einen Namen, den ein anderes Gerät hat, tauschen die beiden.</p>
+      <p style="margin:10px 0 4px"><b id="blinkSt">💡 …</b></p>
+      <p class="sub" style="margin:0 0 10px">heißt bisher: <b>${esc(d.name)}</b> · ${esc(d.manufacturer)} ${esc(d.model)}${d.area ? " · HA-Bereich: " + esc(d.area) : ""}</p>
+      <div class="row"><label for="pickName" style="min-width:0">Das ist:</label><select id="pickName" style="flex:1">${names.map(n => {
+        const holder = devs.find(e => e !== d && assign.get(e.id) === n);
+        return `<option value="${esc(n)}"${n === cur ? " selected" : ""}>${esc(n)}${holder ? ` – tauscht mit dem Gerät, das bisher ${esc(holder.name)} heißt` : ""}</option>`; }).join("")}</select></div>
+      ${note ? `<p class="sub" style="margin:6px 0 0">${note}</p>` : ""}
+      <div class="row" style="justify-content:space-between;margin:16px 0 0">
+        <button class="btn" id="again">💡 Nochmal blinken</button>
+        <span><button class="btn" id="cancel">Abbrechen</button> ${i ? `<button class="btn" id="back">← Zurück</button>` : ""} ${i < devs.length - 1 ? `<button class="btn" id="toPlan">Zur Vorschau</button> <button class="btn primary" id="next">Weiter →</button>` : `<button class="btn primary" id="toPlan">Vorschau →</button>`}</span></div>`;
+    $("#pickName", dlg).onchange = e => {
+      const want = e.target.value, prev = assign.get(d.id), other = devs.find(x => x !== d && assign.get(x.id) === want);
+      if (other) assign.set(other.id, prev);
+      assign.set(d.id, want);
+      note = other ? `Getauscht: Das Gerät, das bisher ${esc(other.name)} heißt, bekommt jetzt ${esc(prev)}.` : "";
+      const keep = $("#blinkSt", dlg).textContent; step(); $("#blinkSt", dlg).textContent = keep;
+    };
+    $("#again", dlg).onclick = blink;
+    $("#cancel", dlg).onclick = close;
+    $("#back", dlg) && ($("#back", dlg).onclick = () => { i--; note = ""; step(); blink(); });
+    $("#next", dlg) && ($("#next", dlg).onclick = () => { i++; note = ""; step(); blink(); });
+    $("#toPlan", dlg).onclick = preview;
+  };
+  const items = () => devs.filter(d => assign.get(d.id) !== d.name).map(d => {
+    const prev = ownerOf(assign.get(d.id)), area = S.setArea && prev?.area_id && prev.area_id !== d.area_id; // der Bereich folgt dem Namen
+    return {device_id: d.id, name: assign.get(d.id), old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || "",
+      ...(area ? {area_id: prev.area_id, area_name: prev.area, current_area_id: d.area_id || "", current_area: d.area || ""} : {})};
+  });
+  const preview = async () => {
+    const list = items();
+    if (!list.length) { dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">Keine Änderung</h2><p class="sub">Alle Geräte behalten ihren Namen.</p><div class="row" style="justify-content:flex-end"><button class="btn" id="back">← Zurück</button><button class="btn primary" id="ok">Schließen</button></div>`;
+      $("#back", dlg).onclick = step; $("#ok", dlg).onclick = close; return; }
+    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">💡 Neu zuordnen – Vorschau</h2><p class="sub"><span class="spin"></span> Lese Entitäten …</p>`;
+    let plan;
+    try { plan = await api.reassignPlan(list); } catch (e) { toast("Vorschau fehlgeschlagen: " + e.message); step(); return; }
+    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">💡 ${list.length} Gerät(e) neu zuordnen</h2>
+      <div class="preview" style="max-height:150px;overflow:auto">${list.map(it => `${esc(it.old_name)} → <b>${esc(it.name)}</b>`).join("<br>")}</div>
+      <p class="sub" style="margin-top:12px">Entity-IDs wechseln mit dem Namen (${plan.entities.length}):</p>
+      <div class="preview" style="max-height:150px;overflow:auto">${plan.entities.map(e => `${esc(e.old)} → <b>${esc(e.new)}</b>`).join("<br>") || "keine"}</div>
+      ${plan.skipped.length ? `<p class="sub">⚠ Übersprungen (ID gehört einem anderen Gerät): ${plan.skipped.map(x => esc(x.old)).join(", ")}</p>` : ""}
+      ${plan.areas.length ? `<p class="sub" style="margin-top:12px">Bereich in Home Assistant (folgt dem Namen):</p><div class="preview">${plan.areas.map(a => `${esc(a.device)}: ${esc(a.from || "–")} → <b>${esc(a.to)}</b>`).join("<br>")}</div>` : ""}
+      <div class="banner" style="border-left-color:var(--ok);margin:12px 0 0;color:var(--fg)"><b>Automationen, Szenen und Dashboards bleiben unverändert.</b> Sie nennen die Namen bzw. IDs – und die gehören danach dem Gerät, das wirklich an diesem Platz hängt.</div>
+      <p class="sub">${S.renameZ2m ? "Zigbee2MQTT-Geräte werden auch in Zigbee2MQTT umbenannt. " : ""}Vorher wird gesichert. Erst bekommen alle Geräte einen Zwischennamen, dann ihren neuen – so kollidiert nichts; geht der erste Schritt schief, wird er zurückgenommen.</p>
+      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="back">← Zurück</button><button class="btn" id="cancel">Abbrechen</button><button class="btn primary" id="go">Tauschen</button></div>`;
+    $("#back", dlg).onclick = () => { step(); blink(); };
+    $("#cancel", dlg).onclick = close;
+    $("#go", dlg).onclick = async () => {
+      close();
+      // vor jeder Änderung festhalten, wer den neuen Namen bisher trägt – Haus/Etage/Raum/Typ wandern mit dem Namen
+      const oldMeta = clone(S.meta), prevOf = new Map(list.map(it => [it.device_id, ownerOf(it.name)?.id]));
+      let res;
+      try { res = await runWithProgress("Geräte werden neu zugeordnet …", pid => api.reassign(list, pid)); }
+      catch (e) { toast("Neu zuordnen fehlgeschlagen: " + e.message); return; }
+      for (const it of list) if ((res.done || []).includes(it.device_id)) {
+        S.meta[it.device_id] = clone(oldMeta[prevOf.get(it.device_id)] || {});
+        const dev = S.devices.find(x => x.id === it.device_id); if (dev) dev.name = it.name;
+      }
+      S.sel.clear(); persist();
+      await refreshFromHA(true); // maßgeblich ist, was Home Assistant wirklich hat
+      await showChecks(res.checks || [], {items: list, renamed: [], opts: {rename_z2m: S.renameZ2m, set_area: S.setArea}}, res.errors || []);
+      renderDevices();
+    };
+  };
+  step(); blink();
 }
 
 /** „Doppelte Entitäten“: Die richtige ID ist schon vergeben, daneben hängt eine zweite Entität mit der alten ID (meist eine Altlast
