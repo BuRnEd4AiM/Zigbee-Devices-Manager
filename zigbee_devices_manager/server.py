@@ -821,16 +821,42 @@ def common_prefix(object_ids):
     return "_".join(out)
 
 
-def id_stems(names, area_names, devents):
+Z2M_UID_RE = re.compile(r"^0x[0-9a-fA-F]{16}_(.+)$")
+
+
+def z2m_suffix(ent, domain, obj):
+    """Endung einer Zigbee2MQTT-Entität hinter dem Gerätenamen (z. B. "_update_available", beim Licht selbst ""), abgelesen
+    an der unique_id <IEEE>_<Objekt-ID>_<Basis-Topic>. Z2M lässt den Typ vorn weg (light → light.<name>, light_l1 → _l1).
+    None, wenn die ID nicht dazu passt (keine Z2M-Entität oder eigene Entity-ID)."""
+    m = Z2M_UID_RE.match(ent.get("unique_id") or "") if ent.get("platform") == "mqtt" else None
+    if not m:
+        return None
+    tokens = m.group(1).split("_")
+    start = 1 if tokens[0] == domain else 0
+    for k in range(len(tokens), start - 1, -1):  # längste zuerst; hinten hängt der Basis-Topic
+        suffix = "".join("_" + t for t in tokens[start:k])
+        if obj.endswith(suffix) and len(obj) > len(suffix):
+            return suffix
+    return None
+
+
+def id_stems(names, area_names, devents, new_slug=""):
     """Mögliche Gerätenamen-Teile am Anfang der Entity-IDs eines Geräts, wichtigste zuerst: alter Name und Name der
     Integration – auch mit einem Bereich davor, denn Home Assistant legt neue Entity-IDs als <Bereich>_<Gerät>_<Entität> an
-    (z. B. light.wohnzimmer_s2_wzel03) –, dann die ID der Haupt-Entität (ohne eigenen Namen, z. B. das Licht selbst; bei
-    mehreren die kürzeste zuerst) und zuletzt der gemeinsame Anfang aller IDs."""
+    (z. B. light.wohnzimmer_s2_wzel03). Sonst eine Vermutung aus den IDs, die noch keinem dieser Namen folgen: ihr
+    gemeinsamer Anfang (ab zwei IDs), bei nur einer die ID der Haupt-Entität (ohne eigenen Namen, z. B. das Licht selbst).
+    Eine Entität ohne eigenen Namen, die über den gemeinsamen Anfang hinausgeht (h1_wz_tas02_update_available), ist keine
+    Haupt-Entität. Und folgen manche IDs schon dem neuen Namen (h1_wzfl_tas02_…), andere nicht (h1_wz_tas02_…), bliebe
+    über alle nur „h1“ – daraus würde h1_wzfl_tas02_wz_tas02_…; eine Vermutung, die nur der Anfang des neuen Namens ist,
+    fällt deshalb weg."""
     names = [n for n in names if n]
-    objs = [e["entity_id"].partition(".")[2] for e in devents]
-    main = sorted({o for e, o in zip(devents, objs) if "original_name" in e and not e["original_name"]}, key=lambda o: (len(o), o))
-    stems = [slugify(n) for n in names] + [slugify(f"{a} {n}") for a in area_names for n in names] + main + [common_prefix(objs)]
-    return [s for s in dict.fromkeys(stems) if s]
+    named = [s for s in dict.fromkeys([slugify(n) for n in names] + [slugify(f"{a} {n}") for a in area_names for n in names]) if s]
+    follows = lambda o, stem: o == stem or o.startswith(stem + "_")  # noqa: E731
+    rest = [(e, o) for e in devents if not any(follows(o := e["entity_id"].partition(".")[2], s) for s in [new_slug, *named] if s)]
+    plausible = lambda g: g and not new_slug.startswith(g + "_")  # noqa: E731
+    common = common_prefix([o for _, o in rest])
+    main = sorted({o for e, o in rest if "original_name" in e and not e["original_name"]}, key=lambda o: (len(o), o))
+    return list(dict.fromkeys(named + ([common] if plausible(common) else [g for g in main if plausible(g)])))
 
 
 def entity_changes(items, entities, devices=(), areas=()):
@@ -849,12 +875,13 @@ def entity_changes(items, entities, devices=(), areas=()):
         objs = [e["entity_id"].partition(".")[2] for e in devents]
         # Bereich des Geräts und seiner Entitäten zuerst, dann alle übrigen (das Gerät kann inzwischen umgezogen sein)
         own = [area_names[a] for a in [dev_area.get(it["device_id"])] + [e.get("area_id") for e in devents] if a in area_names]
-        candidates = id_stems([it.get("old_name"), it.get("orig_name")], list(dict.fromkeys(own + list(area_names.values()))), devents)
+        candidates = id_stems([it.get("old_name"), it.get("orig_name")], list(dict.fromkeys(own + list(area_names.values()))), devents, new_slug)
         mine = {"device": it["name"], "entities": [e["entity_id"] for e in devents][:6], "count": len(devents), "reason": ""}
         n_before = len(changes) + len(skipped)
         for ent in devents:
             domain, _, obj = ent["entity_id"].partition(".")
-            for cand in candidates:
+            suffix = z2m_suffix(ent, domain, obj)  # bei Zigbee2MQTT steht die Endung fest – nur der Teil davor ist der Gerätename
+            for cand in candidates if suffix is None else [obj[:len(obj) - len(suffix)]]:
                 if new_slug and (obj == cand or obj.startswith(cand + "_")):
                     new_id = f"{domain}.{new_slug}{obj[len(cand):]}"
                     if new_id == ent["entity_id"]:

@@ -20,6 +20,7 @@ main{padding:16px;width:100%}
 input,select,button{font:inherit;color:var(--fg)}
 input,select{background:var(--input);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0}
 input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+select.facet.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--input))}
 button.btn{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
 button.btn:hover{border-color:var(--accent)}
 button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:600}
@@ -625,7 +626,7 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], z2mUis: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, storeLoaded: false, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: true, updateYaml: false, updateNodered: false, deleteForce: true};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], z2mUis: [], bridges: [], gateways: {}, gwFilter: "", facets: {}, permitUntil: {}, permitReal: {}, editing: null, storeLoaded: false, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: true, updateYaml: false, updateNodered: false, deleteForce: true};
 /** Haken beim Umbenennen und Löschen – werden im Store gemerkt. */
 const OPTION_KEYS = ["setArea", "renameZ2m", "renameEntities", "updateRefs", "updateYaml", "updateNodered", "deleteForce"];
 
@@ -697,6 +698,10 @@ function syncAreas() {
   return added;
 }
 const typeOf = d => S.scheme.types.find(t => t.id === S.meta[d.id]?.type);
+/** Räume und Gerätetypen alphabetisch nach Namen („Bad 2“ vor „Bad 10“), bei gleichem Namen nach Kürzel – nur für die Anzeige,
+ *  gespeichert bleibt die Reihenfolge. */
+const byName = items => [...items].sort((a, b) => (a.name || "").localeCompare(b.name || "", "de", {numeric: true, sensitivity: "base"})
+  || (a.abbr || "").localeCompare(b.abbr || "", "de", {numeric: true}));
 const gwOf = d => S.gateways[d.bridge] || {};
 /** Kennung des Geräts: IEEE bei Zigbee, Node-ID (hinter einer Matter-Bridge mit Endpunkt) bei Matter. */
 const addrOf = d => d.source !== "matter" ? d.ieee || "" : d.node == null ? "" : "Node " + d.node + (d.endpoint == null ? "" : " · Endpunkt " + d.endpoint);
@@ -712,6 +717,16 @@ const floorOf = d => {
   const room = roomOf(d), area = S.areas.find(a => a.id === (room?.area_id || d.area_id));
   return sc.floors.find(f => area?.floor_id && f.floor_id === area.floor_id) || sc.floors.find(f => f.id === sc.defaultFloor);
 };
+
+/** Filter der Geräteliste nach Haus, Etage, Raum und Typ – so, wie sie in der Zeile gewählt bzw. abgeleitet sind. Wert "-" = ohne. */
+const FACETS = [
+  {key: "house", label: "Haus", none: "ohne Haus", of: d => houseOf(d)?.id, list: () => S.scheme.houses, on: () => useHouse() && S.scheme.houses.length > 1},
+  {key: "floor", label: "Etage", none: "ohne Etage", of: d => floorOf(d)?.id, list: () => S.scheme.floors, on: () => true},
+  {key: "room", label: "Raum", none: "ohne Raum", of: d => roomOf(d)?.id, list: () => byName(S.scheme.rooms), on: () => true},
+  {key: "type", label: "Typ", none: "ohne Typ", of: d => typeOf(d)?.id, list: () => byName(S.scheme.types), on: () => true}
+];
+/** Passt das Gerät zu allen gesetzten Filtern (außer skip – für die Zahlen in dessen Auswahl)? */
+const facetOk = (d, skip) => FACETS.every(f => f.key === skip || !f.on() || !S.facets[f.key] || (f.of(d) || "-") === S.facets[f.key]);
 
 // ---------- Sprung zu Zigbee2MQTT / Home Assistant ----------
 /** Zigbee2MQTT-Instanz (aus bridge/info) eines Gateways: über die Koordinator-IEEE, sonst über den Basis-Topic. */
@@ -877,7 +892,7 @@ function suggestions() {
 // ---------- Geräte-Tab ----------
 function renderDevices() {
   const sug = suggestions(), q = S.q.toLowerCase();
-  let rows = allRows().filter(d => {
+  const baseOk = d => {
     if (S.filter === "new" && !d.is_new) return false;
     if (S.filter === "named" && (d.is_new || d.planned)) return false;
     if (S.filter === "planned" && !d.planned) return false;
@@ -885,11 +900,21 @@ function renderDevices() {
     if (S.filter === "ids" && !staleIds(d).length) return false;
     if (S.gwFilter && d.bridge !== S.gwFilter) return false;
     return !q || [d.name, d.orig_name, addrOf(d), d.model, d.manufacturer, d.area, SOURCE_NAMES[d.source]].join(" ").toLowerCase().includes(q);
-  });
-  const roomOpts = sel => `<option value="">–</option>` + S.scheme.rooms.map(r => `<option value="${r.id}"${r.id === sel ? " selected" : ""}>${esc(r.abbr)} · ${esc(r.name)}</option>`).join("");
+  };
+  const base = allRows().filter(baseOk), rows = base.filter(d => facetOk(d));
+  // Auswahl je Filter: nur Einträge, die bei den übrigen Filtern vorkommen, mit Anzahl
+  const facetSel = f => {
+    const n = new Map(), cur = S.facets[f.key] || "";
+    for (const d of base) if (facetOk(d, f.key)) { const v = f.of(d) || "-"; n.set(v, (n.get(v) || 0) + 1); }
+    return `<select class="facet${cur ? " on" : ""}" data-k="${f.key}" title="Nur Geräte mit diesem Wert zeigen (${f.label})"><option value="">${f.label}: alle</option>`
+      + f.list().filter(x => n.has(x.id) || cur === x.id).map(x => `<option value="${x.id}"${cur === x.id ? " selected" : ""}>${esc(x.abbr)} · ${esc(x.name)} (${n.get(x.id) || 0})</option>`).join("")
+      + (n.has("-") || cur === "-" ? `<option value="-"${cur === "-" ? " selected" : ""}>${f.none} (${n.get("-") || 0})</option>` : "") + `</select>`;
+  };
+  const facetOn = FACETS.some(f => f.on() && S.facets[f.key]), hiddenSel = [...S.sel].filter(id => !rows.some(d => d.id === id)).length;
+  const roomOpts = sel => `<option value="">–</option>` + byName(S.scheme.rooms).map(r => `<option value="${r.id}"${r.id === sel ? " selected" : ""}>${esc(r.abbr)} · ${esc(r.name)}</option>`).join("");
   const houseOpts = sel => `<option value="">–</option>` + S.scheme.houses.map(h => `<option value="${h.id}"${h.id === sel ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("");
   const floorOpts = sel => `<option value="">–</option>` + S.scheme.floors.map(f => `<option value="${f.id}"${f.id === sel ? " selected" : ""}>${esc(f.abbr)} · ${esc(f.name)}</option>`).join("");
-  const typeOpts = sel => `<option value="">–</option>` + S.scheme.types.map(t => `<option value="${t.id}"${t.id === sel ? " selected" : ""}>${esc(t.abbr)} · ${esc(t.name)}</option>`).join("");
+  const typeOpts = sel => `<option value="">–</option>` + byName(S.scheme.types).map(t => `<option value="${t.id}"${t.id === sel ? " selected" : ""}>${esc(t.abbr)} · ${esc(t.name)}</option>`).join("");
   const counts = {all: allRows().length, new: allRows().filter(d => d.is_new).length};
   const applicable = rows.filter(d => sug.has(d.id) && sug.get(d.id) !== d.name && (!S.sel.size || S.sel.has(d.id)));
   // Entity-IDs angleichen: nur ohne ausstehende Umbenennung – die zieht die IDs ohnehin mit
@@ -909,7 +934,13 @@ function renderDevices() {
       <button class="btn" id="addPlanned">＋ Neues Gerät planen</button>
     </div>
     <div class="bar">
-      <span class="sub">${S.sel.size} ausgewählt</span>
+      <span class="sub">Filter:</span>
+      ${FACETS.filter(f => f.on()).map(facetSel).join("")}
+      ${facetOn ? `<button class="btn" id="facetReset" title="Alle Filter für Haus, Etage, Raum und Typ zurücksetzen">✕ Filter zurücksetzen</button>` : ""}
+      <span class="sub">${rows.length} von ${allRows().length} Geräten</span>
+    </div>
+    <div class="bar">
+      <span class="sub">${S.sel.size} ausgewählt${hiddenSel ? ` (${hiddenSel} ausgeblendet – zählen nicht mit)` : ""}</span>
       <select id="bHouse" title="Haus">${houseOpts("")}</select>
       <select id="bFloor" title="Etage">${floorOpts("")}</select>${useFloor() ? "" : `<button class="btn" id="floorOn" title="Im Namensschema steht {floor} noch nicht. Klick fügt es vorne an das Muster an.">Etage im Muster aktivieren</button>`}${useHouse() ? "" : `<button class="btn" id="houseOn" title="Im Namensschema steht {house} noch nicht. Klick fügt es vorne an das Muster an.">Haus im Muster aktivieren</button>`}
       <select id="bRoom">${roomOpts("")}</select>
@@ -957,6 +988,8 @@ function renderDevices() {
   $("#q", root).oninput = e => { S.q = e.target.value; const p = e.target.selectionStart; renderDevices(); const i = $("#q"); i.focus(); i.setSelectionRange(p, p); };
   root.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { S.filter = b.dataset.f; renderDevices(); });
   $("#gwf", root) && ($("#gwf", root).onchange = e => { S.gwFilter = e.target.value; renderDevices(); });
+  root.querySelectorAll("select.facet").forEach(x => x.onchange = () => { S.facets[x.dataset.k] = x.value; renderDevices(); });
+  $("#facetReset", root) && ($("#facetReset", root).onclick = () => { S.facets = {}; renderDevices(); });
   $("#floorOn", root) && ($("#floorOn", root).onclick = () => { S.scheme.pattern = "{floor}-" + S.scheme.pattern; S.scheme.case = "keep"; persist(); toast("Muster: " + S.scheme.pattern); renderDevices(); });
   $("#houseOn", root) && ($("#houseOn", root).onclick = () => { S.scheme.pattern = "{house}-" + S.scheme.pattern; S.scheme.case = "keep"; persist(); toast("Muster: " + S.scheme.pattern); renderDevices(); });
   $("#rArea", root).onchange = e => { S.setArea = e.target.checked; persist(); };
@@ -981,7 +1014,7 @@ function renderDevices() {
   $("#bDel", root).onclick = () => deleteDevices(rows.filter(d => S.sel.has(d.id)));
   $("#bAssign", root).onclick = () => {
     const room = $("#bRoom", root).value, type = $("#bType", root).value, house = $("#bHouse", root)?.value, floor = $("#bFloor", root)?.value;
-    S.sel.forEach(id => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type}), ...(house && {house}), ...(floor && {floor})}; });
+    rows.filter(d => S.sel.has(d.id)).forEach(({id}) => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type}), ...(house && {house}), ...(floor && {floor})}; });
     persist(); renderDevices();
   };
   $("#fixAll", root) && ($("#fixAll", root).onclick = () => fixEntityIds(staleRows));
@@ -1720,8 +1753,8 @@ function renderScheme() {
     </div>
     <div class="panel list"><h2>Häuser / Präfix</h2>${list("houses", sc.houses)}<button class="btn" data-add="houses">＋ Haus</button></div>
     <div class="panel list"><h2>Etagen</h2><p class="sub">Nummer oder Kürzel der Etage (0 = Erdgeschoss, 1, 2, 3 …). Zusammen mit dem Haus ergibt das z. B. H1 oder S2. Etagen aus Home Assistant werden übernommen und per Raum/Bereich automatisch zugeordnet.</p>${list("floors", sc.floors)}<button class="btn" data-add="floors">＋ Etage</button></div>
-    <div class="panel list"><h2>Räume</h2>${list("rooms", sc.rooms)}<button class="btn" data-add="rooms">＋ Raum</button> <button class="btn" id="syncAreas" title="Bereiche aus Home Assistant als Räume übernehmen">⟳ Bereiche aus HA</button>${S.areas.length ? "" : ` <span class="sub">(keine Bereiche gefunden)</span>`}</div>
-    <div class="panel list"><h2>Gerätetypen</h2>${list("types", sc.types)}<button class="btn" data-add="types">＋ Typ</button></div>
+    <div class="panel list"><h2>Räume</h2>${list("rooms", byName(sc.rooms))}<button class="btn" data-add="rooms">＋ Raum</button> <button class="btn" id="syncAreas" title="Bereiche aus Home Assistant als Räume übernehmen">⟳ Bereiche aus HA</button>${S.areas.length ? "" : ` <span class="sub">(keine Bereiche gefunden)</span>`}</div>
+    <div class="panel list"><h2>Gerätetypen</h2>${list("types", byName(sc.types))}<button class="btn" data-add="types">＋ Typ</button></div>
   </div>`;
   const root = $("#tab-scheme");
   $("#case", root).value = sc.case; $("#cst", root).value = c.style;
@@ -1752,7 +1785,12 @@ function renderScheme() {
       sc[kind] = sc[kind].filter(i => i !== item); upd();
     };
   });
-  root.querySelectorAll("[data-add]").forEach(b => b.onclick = () => { sc[b.dataset.add].push({id: uid("x"), name: "Neu", abbr: "NE"}); upd(); });
+  root.querySelectorAll("[data-add]").forEach(b => b.onclick = () => {
+    const item = {id: uid("x"), name: "Neu", abbr: "NE"}; sc[b.dataset.add].push(item); upd();
+    // Räume und Typen stehen alphabetisch – der neue Eintrag steht also unter „N“: dorthin springen, Namen zum Überschreiben markieren
+    const inp = $(`#tab-scheme .row[data-id="${item.id}"] input[data-k="name"]`);
+    if (inp) { inp.scrollIntoView({block: "center"}); inp.focus(); inp.select(); }
+  });
 }
 
 // ---------- Export-Tab ----------
