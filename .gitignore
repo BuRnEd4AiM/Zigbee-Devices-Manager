@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# Bilder aus lokalen Browser-Tests (die Bilder für die README liegen in docs/screenshots)
+/*.png

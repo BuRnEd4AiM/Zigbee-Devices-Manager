@@ -1,7 +1,7 @@
 name: Demo bauen
 on:
   push:
-    paths: ["zigbee_devices_manager/web/**", "scripts/build_demo.py", ".github/workflows/demo.yml"]
+    paths: ["zigbee_devices_manager/web/**", "scripts/build_demo.py", "docs/**", ".github/workflows/demo.yml"]
   workflow_dispatch:
 jobs:
   demo:
@@ -15,7 +15,8 @@ jobs:
         with:
           name: zigbee-devices-manager-demo
           path: demo/zigbee-devices-manager-demo.html
-      # Release-Assets werden von GitHub als Datei-Download ausgeliefert (nicht im Browser angezeigt)
+      # Release-Assets werden von GitHub als Datei-Download ausgeliefert (nicht im Browser angezeigt).
+      # Vorabversion, damit „demo“ nie als neueste Version gilt (das sind die Releases vX.Y.Z).
       - name: Release "demo" aktualisieren
         if: github.ref == 'refs/heads/main'
         env:
@@ -23,5 +24,34 @@ jobs:
         run: |
           gh release delete demo --cleanup-tag --yes || true
           gh release create demo demo/zigbee-devices-manager-demo.html \
-            --title "Demo" --notes "Eigenständige Demo – herunterladen und im Browser öffnen." \
-            --target "$GITHUB_SHA"
+            --title "Demo" --notes "Eigenständige Demo – herunterladen und im Browser öffnen. Direkt im Browser: https://burned4aim.github.io/Zigbee-Devices-Manager/" \
+            --target "$GITHUB_SHA" --prerelease --latest=false
+
+  # Demo im Browser: https://burned4aim.github.io/Zigbee-Devices-Manager/
+  # Einmalig einschalten: Repository → Settings → Pages → Build and deployment → Source: „GitHub Actions“.
+  # Solange Pages aus ist, schlägt nur dieser Schritt fehl – der Rest bleibt grün.
+  pages:
+    if: github.ref == 'refs/heads/main'
+    needs: demo
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seite zusammenstellen
+        run: |
+          python3 scripts/build_demo.py
+          mkdir -p _site
+          cp demo/zigbee-devices-manager-demo.html _site/index.html
+          cp -r docs/screenshots _site/screenshots
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

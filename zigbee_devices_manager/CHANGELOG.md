@@ -8,6 +8,8 @@
 - Gerätename, Zigbee2MQTT-Name, Entity-IDs, Haus/Etage/Raum/Typ und (mit „Raum als Bereich in HA setzen“) der Bereich wechseln mit dem Namen. **Automationen, Szenen und Dashboards bleiben unverändert** – sie steuern danach das Gerät, das wirklich an diesem Platz hängt.
 - Ausgeführt wird über Zwischennamen (erst alle auf „…-tausch“, dann auf den neuen Namen), damit nichts kollidiert; geht der erste Schritt schief, wird er zurückgenommen. Vorher wird gesichert, danach geprüft. Hat sich ein Name inzwischen in Home Assistant geändert, bricht das Add-on ab und bittet ums Neu-Laden.
 - **„💡“ je Gerät** in der Liste: lässt das Gerät blinken – über den Identifizieren-Knopf (Matter, ZHA), bei Zigbee2MQTT über den Effekt „blink“ (ändert den Zustand nicht), sonst kurzes Aufblinken der Lampe.
+- Tauschen geht auch zwischen Matter- und Zigbee-Geräten. Hat das andere Gerät eine Entität nicht (z. B. Matter hat einen Identifizieren-Knopf, Zigbee2MQTT ein Einschaltverhalten), warnt die Vorschau, welche Entity-IDs es danach nicht mehr gibt und wo sie verwendet werden – danach mit „🔍 Verweise prüfen“ ersetzen oder aus Szenen entfernen.
+- **Neue Projektseite auf GitHub:** Bilder aller Reiter, anklickbare Versionsnummer, Demo direkt im Browser, Knopf „Repository zu Home Assistant hinzufügen“, Schnellstart. Zu jeder Version entsteht automatisch ein Release mit diesem Text. Auch die Add-on-Seite in Home Assistant hat jetzt eine Beschreibung und einen Reiter „Dokumentation“.
 
 ## 0.15.0
 

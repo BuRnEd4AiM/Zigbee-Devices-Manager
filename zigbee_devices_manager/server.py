@@ -1884,7 +1884,13 @@ async def reassign_plan(request):
         c, s, _ = entity_changes([it], others, devices, areas)
         changes += c
         skipped += s
-    return web.json_response({"entities": changes, "skipped": skipped,
+    # IDs, die es danach nicht mehr gibt, weil das andere Gerät sie nicht hat (z. B. Matter ↔ Zigbee: button.…_identify gegen
+    # select.…_power_on_behavior) – wer sie nutzt, zeigt danach ins Leere
+    before = {e["entity_id"] for e in entities if e.get("device_id") in moving}
+    lost = sorted(before - ({c["new"] for c in changes} | (before - {c["old"] for c in changes})))
+    usages, _, _ = await collect_usages({"update_references": True}, {i: i for i in lost}) if lost else ([], 0, [])
+    used = lambda i: [f"{KIND_NAMES.get(u['kind'], u['kind'])} „{u['title']}“" for u in usages if i in u["entities"]]  # noqa: E731
+    return web.json_response({"entities": changes, "skipped": skipped, "lost": [{"id": i, "used_in": used(i)} for i in lost],
                               "areas": [{"device": it["old_name"], "from": it.get("current_area") or "", "to": it.get("area_name") or ""}
                                         for it in items if it.get("area_id") and it.get("area_id") != it.get("current_area_id")]})
 

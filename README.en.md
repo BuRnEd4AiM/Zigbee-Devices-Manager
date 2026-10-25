@@ -1,77 +1,164 @@
-# Zigbee Devices Manager
+<p align="center">
+  <img src="zigbee_devices_manager/logo.png" alt="Zigbee Devices Manager" width="128">
+</p>
 
-[![Download demo](https://img.shields.io/badge/%E2%AC%87%EF%B8%8F-Download%20demo-0b7bd6?style=for-the-badge)](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases/download/demo/zigbee-devices-manager-demo.html)
+<h1 align="center">Zigbee Devices Manager</h1>
 
-Home Assistant add-on with its own sidebar panel ("Zigbee Namen") to view, edit and assign
-names for all Zigbee devices (ZHA and Zigbee2MQTT) and Matter devices (e.g. over Thread) following a fixed naming scheme.
-German version: [README.md](README.md)
+<p align="center">
+  Home Assistant add-on that names Zigbee and Matter devices after a fixed naming scheme –<br>
+  including entity IDs, rooms, automations, scenes and dashboards.
+</p>
 
-## Features
+<p align="center">
+  <a href="zigbee_devices_manager/CHANGELOG.md"><img alt="Version" src="https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2FBuRnEd4AiM%2FZigbee-Devices-Manager%2Fmain%2Fzigbee_devices_manager%2Fconfig.yaml&query=%24.version&label=Version&color=0b7bd6"></a>
+  <a href="https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases"><img alt="Releases" src="https://img.shields.io/badge/Releases-all%20versions-555"></a>
+  <a href="https://burned4aim.github.io/Zigbee-Devices-Manager/"><img alt="Demo in the browser" src="https://img.shields.io/badge/Demo-open%20in%20browser-1a8f4c"></a>
+  <a href="https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/actions/workflows/tests.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/BuRnEd4AiM/Zigbee-Devices-Manager"></a>
+  <img alt="Home Assistant add-on" src="https://img.shields.io/badge/Home%20Assistant-Add--on-41bdf5?logo=homeassistant&logoColor=white">
+</p>
 
-- List of all new and existing Zigbee devices, inline rename, search, "new" filter; plus filters by house, floor, room and type (with counts, "ohne Raum/Typ" finds gaps) – bulk actions only affect the visible devices
-- **Matter devices (Thread/Wi-Fi):** all devices of the Matter integration appear in the list as well – under the gateway "Matter", with their node ID instead of an IEEE (plus the endpoint for devices behind a Matter bridge). They use the same naming scheme, house/floor/room/type and running numbers as the Zigbee devices; renaming happens in Home Assistant (`name_by_user`), including entity IDs, references and area. A Matter device counts as new as long as it has no custom name in HA. Matter devices are still paired in the Home Assistant app.
-- **Configurable naming scheme**, e.g. `{room}_{type}_{nr}` → `WZ_LP_01`
-  - Abbreviations for rooms and device types, selectable per device (sorted alphabetically by name)
-  - Automatic counter per room+type that skips names already in use
-  - Counter as Arabic (`01`), Roman (`III`) or letters (`C`)
-  - UPPER / lower / as typed
-- **Floors:** token `{floor}` for storeys (e.g. H0 = ground floor, H1 = 1st floor, H2, H3 … or S2/S3 – abbreviations are free). Floors from Home Assistant are imported; a device's floor follows its room/HA area but can be overridden per device or via multi-select. Example: `{floor}-{room}-{type}{nr}` → `H1-wzfl-lband01`. House and floor can be combined.
-- **Set the room in Home Assistant:** with "Raum als Bereich in HA setzen" ticked (default: on) the add-on assigns the device to the chosen room as its area when renaming. Missing areas are created in HA; the preview lists all changes first and the verification afterwards checks the assignment. Without the tick the room is only part of the name.
-- **Assign room only (no renaming):** for devices that are already named, "Raum setzen" appears when the chosen room differs from the HA area; select several devices → "Raum in HA setzen". With preview, creation of missing areas and verification; the name stays unchanged.
-- **Several Zigbee2MQTT instances:** before renaming, the add-on asks MQTT (`<base>/bridge/devices`) which Z2M instance the device (by its IEEE) really belongs to and sends the request there – regardless of the gateway topic entered. If Z2M's reply is missing, it checks whether Z2M already lists the new name.
-- **Understandable preview:** if no entity ID changes, the dialog says why (names already contain the new name / no ID starts with the old name / no entities) and lists the IDs found. The common start of a device's entity IDs is also used as a template.
-- **House/floor in the name takes precedence:** if a name starts with e.g. `S2-…`, house and floor are taken from it even when the room or type in the name is unknown. Rooms from HA areas are only chosen automatically when they fit the device's house and floor – an area like "Bad (H1)" is not assigned to an S2 device (a code in the room name such as `(H1)` is recognised). The same applies to room abbreviations in the name: if "Bad (H1)" and "Bad (S2)" share the abbreviation `BAD`, `S2-BAD-…` picks the room with the code `(S2)`. "⟳ Aus Namen zuordnen" discards previously saved rooms that do not fit.
-- **Rename directly in Zigbee2MQTT, cleanly adopted by HA:** by default the add-on renames Z2M devices like Z2M's own dialog (friendly name, MQTT topic and – with "Entity-IDs in HA anpassen" – the entity IDs, `homeassistant_rename`). It then waits until Z2M has re-announced the device to Home Assistant and updates HA: an old custom HA name (`name_by_user`) that would hide the new Z2M name is removed, so HA shows the name from Z2M (if Z2M already uses that name, only HA is updated). The area (room) is set only afterwards so it is not lost when Z2M re-creates the device. The verification also shows whether Z2M itself has the new name. Z2M devices already named in Z2M no longer count as "new". The add-on remembers the rename checkboxes.
-- **Independent options:** "In Zigbee2MQTT umbenennen", "Entity-IDs in HA anpassen", "Verweise in Automationen/Dashboards", "YAML-Dateien" and "Node-RED-Flows" can be ticked independently. The reference options need changed entity IDs and therefore tick "Entity-IDs" as well; without it only what is ticked happens.
-- **Recognise existing names and assign them:** the add-on splits existing names by your pattern and abbreviations (e.g. `H1-WZFL-KON03` → house/floor H1, room WZFL, type KON, no. 03) and selects house, floor, room and type automatically – at start for devices without their own choice, via "⟳ Aus Namen zuordnen" for all. A name that already fits stays unchanged including its number ("✓ aktuell"); new numbers only fill free slots. The "Passt nicht (n)" filter lists names the pattern does not recognise.
-- **Auto-detect the Zigbee2MQTT base topic:** the add-on looks for running Z2M instances over MQTT (`<base>/bridge/info`) and fills in the base topic per gateway automatically (matched via the coordinator IEEE). "Basis-Topics erkennen" in the Gateways tab lists all topics found; when there is no reply the error message names the topics found.
-- **Real state:** after renaming/assigning, the list re-reads all devices from Home Assistant; "↻ Neu laden" does it any time. Whatever Home Assistant did not accept does not show up as renamed.
-- **Progress bar and Z2M feedback:** a bar shows progress while renaming. With Zigbee2MQTT the add-on waits for Z2M's reply (`bridge/response/device/rename`); if Z2M reports an error (e.g. name already in use) or does not answer (wrong base topic?), the message is shown right away and entity IDs/references of that device are left untouched. Same for pairing. Renaming uses the same option as Z2M's own dialog ("update Home Assistant entity ID", `homeassistant_rename`); if Z2M does not rename the entity IDs itself, the add-on does it after a short wait.
-- **House letter + floor (H0, H1, S2 …):** house = letter (H, S), floor = number (0 = ground floor, 1, 2, 3 …); pattern `{house}{floor}-{room}-{type}{nr}` → `H1-wzfl-lband01`, `S2-wzfl-lband01`. The "H0, H1, S2 …" button in the scheme tab applies this preset in one click. A house can be set per gateway; the floor comes from the room/HA area.
-- **Rooms from Home Assistant:** all HA areas are imported as rooms automatically (abbreviation suggested and editable); devices get their HA area preselected as room. "⟳ Bereiche aus HA" in the scheme tab re-syncs; deleted rooms are not re-added on their own.
-- **House prefix:** patterns with `{house}`, e.g. `{house}-{room}-{type}{nr}` → `H1-wzfl-lband01`. Houses, rooms and types with their own abbreviations, a default house plus per-device choice
-- Multi-select → assign room/type → "apply suggestions"
-- **Reassign swapped spots:** select devices → "💡 Neu zuordnen": the devices blink one after another and you pick the name of the position each one is at (swap or rotation). Name, Zigbee2MQTT name, entity IDs and room follow the name; automations, scenes and dashboards stay as they are and then control the right position. Uses temporary names, with preview, backup and verification. "💡" per device makes it blink (identify button or Zigbee2MQTT effect).
-- **Delete devices completely:** tick devices → "🗑 Löschen". Zigbee2MQTT devices leave the Zigbee network and are removed from Z2M (`bridge/request/device/remove`), ZHA devices via `zha.remove`; Home Assistant removes Matter devices from its Matter fabric when deleting them. Then device and entities disappear from HA. The preview lists the affected entities, attached devices (e.g. behind a Matter bridge) and automations/dashboards that will point to nothing afterwards. Nothing happens until you type **LÖSCHEN**. If a Z2M device does not respond (e.g. a sleeping battery sensor), the add-on can force-remove it and tells you so. The ZHA coordinator is protected; if removal in the bridge fails, the device also stays in HA. A backup is made first, the result is checked afterwards.
-- **Align entity IDs:** Home Assistant puts the area in front of new entity IDs (`light.wohnzimmer_s2_wzel03`). When renaming, the add-on recognises that prefix (also a former area and the ID of the device's main entity) and turns it into `light.s2_wzel_lsp03`. Named devices whose entity IDs still carry the name from pairing (common with Matter) show up under the "Alte Entity-IDs" filter; "⚠ Entity-IDs angleichen" in the row or as a bulk button renames only the IDs – name and area stay, references in automations/dashboards are updated if you choose.
-- **Duplicate entities:** if the correct entity ID is already taken (usually a leftover from a former name), the "Doppelte Entitäten" filter shows both with their state (active/orphaned/disabled) and usage. Orphaned or disabled leftovers can be removed, references are switched to the correct ID; active entities are never removed.
-- **Check references:** "🔍 Verweise prüfen" in the device list finds automations, scripts, scenes and dashboards that point to entities that no longer exist, and replaces the old ID with the entity you pick (search field by name/ID, suggested from the log of all renames, `/config/zigbee_devices_manager/entity-id-verlauf.json`). Only the ID is replaced, a backup is made first. Entities that no longer exist can be removed from scenes (just that entry). Useful e.g. for cards like the Hue-like light card, which show only an error as soon as one entity is missing.
-- **Verification after renaming:** the add-on re-reads Home Assistant and shows ✅/⚠️/❌ for device names (up to 15 s wait for Z2M), entity IDs and leftover old references in automations, YAML and Node-RED. "Re-check" reads again.
-- **Multiple gateways/houses:** the "Gateways" tab lists every Zigbee2MQTT instance (and ZHA, Matter). Per gateway: label, MQTT base topic and house (applied to its devices automatically). Gateway filter in the device list.
-- **Pairing:** "4 Min anlernen" in the "Gateways" tab opens the network (Z2M via `bridge/request/permit_join`, ZHA via `zha.permit`), "Stopp" ends it; status with countdown.
-- **Rename many at once:** tick devices → assign house/room/type → "apply selected suggestions" (no selection: all visible)
-- Planned devices reserve names/numbers
-- Rename entity IDs along with the device (default: on, can be unticked)
-- CSV/JSON export, scheme export/import
-- **"Netzwerk" tab (Zigbee2MQTT):** the network as a collapsible tree – who hangs on whom and how good the link is (LQI badges green ≥ 150, yellow 80–149, orange 30–79, red < 30; thresholds adjustable; both values when the directions differ). Routers hang on the best path to the coordinator (the weakest link on the path as strong as possible; ties: fewer hops), end devices on their parent; per device the other routers in range can be expanded. Devices without a link are grouped under "Nicht verbunden". Search, filters for weak links and device type, expand/collapse all, instance switcher, details on click (parent, path, all neighbours with LQI, last seen, "ⓘ Z2M"/"⌂ HA"). "Scan starten" asks Z2M for the network map (`bridge/request/networkmap`, raw) – only on demand; the last scan is kept and an existing networkmap sensor in HA is used too. LQI 0 counts as "no current reading" when the other direction has a value. The add-on also takes over every network map Zigbee2MQTT sends out – e.g. when it is loaded in Z2M's own interface. **Better connection:** Zigbee does not let you dictate a route; an end device can however be re-paired via one chosen router only (`permit_join` with `device`) and then hangs on that router – the tab suggests a router in the same room with a strong path. Tests: `node --test test/zigbee-tree.test.mjs`.
-- **Jump straight to a device:** in the device list, "ⓘ Z2M" opens the device's info page in the Zigbee2MQTT UI (MQTT topic, exposes, settings) and "⌂ HA" opens the device page in Home Assistant (entities, area, MQTT info). The add-on finds the Z2M UI itself (Zigbee2MQTT add-on via ingress, or `frontend.url` from Z2M); with several instances pick it in the "Gateways" tab under "Z2M-Oberfläche" or enter an address such as `http://192.168.1.10:8080`.
-- **Automatic backups:** naming scheme, assignments, planned devices, gateways and the device list from HA are backed up – after changes at most hourly, daily, before every rename/area assignment and before every restore (unchanged states are not duplicated, the last 60 are kept). Location: `/config/zigbee_devices_manager/backups` – survives reinstalling the add-on and is part of every HA backup. If the settings are missing at start, the add-on restores the latest state by itself. "Export" tab: list of backups, "Jetzt sichern" (back up now), restore, download as JSON or the device list as CSV, restore from a file.
+<p align="center">
+  <a href="https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FBuRnEd4AiM%2FZigbee-Devices-Manager"><img alt="Add repository to my Home Assistant" src="https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg"></a>
+</p>
+
+<p align="center"><a href="README.md">Deutsch</a> · <b>English</b></p>
+
+![Device list with filters and name suggestions](docs/screenshots/geraete.png)
+
+> The user interface is in German.
+
+## What it does
+
+- 🏷️ **A naming scheme instead of chaos** – e.g. `{house}{floor}-{room}-{type}{nr}` → `S2-WZEL-LSP03`, with abbreviations, automatic counting and free numbers.
+- 🔗 **Everything follows** – device name in Zigbee2MQTT or Home Assistant, entity IDs, room as HA area and references in automations, scripts, scenes, dashboards, YAML and Node-RED. Preview first, verification afterwards.
+- 📡 **Zigbee2MQTT, ZHA and Matter** in one list – also several Zigbee2MQTT instances and several houses.
+- 💡 **Reassign swapped spots** – lamps blink one after another, you pick the right position; names and entity IDs swap without taking a spot out of the ceiling.
+- 🔍 **Clean up** – align old entity IDs, resolve duplicate entities, find and repair broken references (e.g. cards that only show an error).
+- 🕸️ **Network view** – the Zigbee network as a tree with link quality.
+- 🛟 **Safe** – automatic backups, one-click restore, verification after every change.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/umbenennen.png" alt="Rename with preview"><br><sub><b>Rename with preview</b> – new entity IDs and the automations/dashboards that are updated too.</sub></td>
+    <td width="50%"><img src="docs/screenshots/neu-zuordnen.png" alt="Reassign spots"><br><sub><b>💡 Reassign</b> – the device blinks, you pick the name of its position.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/verweise.png" alt="Check references"><br><sub><b>🔍 Check references</b> – find missing entities, replace them via search or remove them from scenes.</sub></td>
+    <td><img src="docs/screenshots/netzwerk.png" alt="Network"><br><sub><b>Network</b> – who hangs on whom, how good the link is, where the weakest spot is.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/namensschema.png" alt="Naming scheme"><br><sub><b>Naming scheme</b> – pattern, houses, floors, rooms and types with abbreviations.</sub></td>
+    <td><img src="docs/screenshots/geraete-dunkel.png" alt="Dark theme"><br><sub><b>Dark theme</b> – follows the device setting automatically.</sub></td>
+  </tr>
+</table>
+
+## Try it
+
+- **[▶ Demo in the browser](https://burned4aim.github.io/Zigbee-Devices-Manager/)** – runs without Home Assistant on sample data; changes stay in your browser only.
+- **[⬇️ Download the demo](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases/download/demo/zigbee-devices-manager-demo.html)** – a single HTML file that works offline.
 
 ## Installation
 
-Settings → Add-ons → Add-on Store → ⋮ → Repositories → add
-`https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager`, then install "Zigbee Devices Manager".
+1. Click **"Add repository to my Home Assistant"** above – or in Home Assistant: *Settings → Add-ons → Add-on Store → ⋮ → Repositories* and add `https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager`.
+2. Install and start **"Zigbee Devices Manager"**.
+3. **"Zigbee Namen"** appears in the sidebar.
 
-## Demo
+## Quick start
 
-**[⬇️ Download the demo](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases/download/demo/zigbee-devices-manager-demo.html)** (starts the download directly, then open it in a browser) · [View on GitHub](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/blob/main/demo/zigbee-devices-manager-demo.html)
+1. Pick a **naming scheme** ("Namensschema" tab) – e.g. "H0, H1, S2 …" for house letter + floor. Rooms and floors from Home Assistant are imported.
+2. In the **device list**, assign house, floor, room and type – one by one or for several devices at once. "⟳ Aus Namen zuordnen" recognises existing names.
+3. **"Vorschläge übernehmen"** (apply suggestions) – the preview shows new names, entity IDs and affected automations/dashboards; afterwards the add-on verifies the result.
+4. Now and then use **"🔍 Verweise prüfen"** and the **"Alte Entity-IDs"** / **"Doppelte Entitäten"** filters to clean up leftovers.
 
-`demo/zigbee-devices-manager-demo.html` is a standalone file (no backend): download it and open it in
-a browser. Rebuild with `python3 scripts/build_demo.py` (also available as a GitHub Actions artifact).
+## Features in detail
 
-## Notes
+<details>
+<summary><b>Device list, filters and naming scheme</b></summary>
 
-- Zigbee2MQTT devices are renamed in Z2M by default (via `mqtt.publish` to `<base_topic>/bridge/request/device/rename`; base topic
-  per gateway or in the add-on options: `z2m_base_topic`); Home Assistant takes the name from Z2M. ZHA devices (or Z2M with the
-  box unticked) are renamed in the Home Assistant device registry (`name_by_user`).
-- **Rename entity IDs:** shows a preview of the new entity IDs first.
-- **Update references** (default: on): uses the entity IDs Home Assistant actually has after renaming (also when Zigbee2MQTT renames them itself). With the box unticked, the preview warns if automations/dashboards use the old IDs; after renaming, "Alte IDs jetzt ersetzen" fixes leftovers.
-  Replaces the old entity IDs in automations, scripts, scenes and dashboards managed via the UI.
-  Preview first, old configs are backed up to `/data/backups/`. Optionally also **YAML files** under `/config` (packages, `configuration.yaml`, YAML dashboards …; plain text replacement
-  with word boundaries, comments are kept) and **Node-RED flows** (`flows.json` of the Node-RED add-on). Check/reload the config
-  after YAML changes and restart Node-RED afterwards. The add-on mounts `/config` and `/addon_configs` for this.
-  `.storage`, `custom_components` and `secrets.yaml` are never touched.
-- Pairing new devices still happens in ZHA/Z2M; they show up here as "new" automatically.
-- Scheme and assignments are stored in the add-on's `/data/store.json`; a copy and the backups live in `/config/zigbee_devices_manager/`. To start from scratch on purpose, delete that folder too before reinstalling.
-- The add-on reads the installed Zigbee2MQTT add-ons via the Supervisor API (`hassio_api`, read-only) to link their UI.
-- Changes per version: [`zigbee_devices_manager/CHANGELOG.md`](zigbee_devices_manager/CHANGELOG.md) (German) – Home Assistant shows it in the update dialog. Every new version needs a `## <version>` section there.
+- List of all new and existing devices, inline rename, search, filters "new", "named", "doesn't fit", "planned"; plus filters by house, floor, room and type (with counts, "ohne Raum/Typ" finds gaps). Bulk actions only affect the visible devices.
+- **Configurable naming scheme**, e.g. `{room}_{type}_{nr}` → `WZ_LP_01`
+  - Abbreviations for rooms and device types (sorted alphabetically by name)
+  - Automatic counter per room+type that skips names already in use
+  - Counter as Arabic (`01`), Roman (`III`) or letters (`C`)
+  - UPPER / lower / as typed
+- **Floors:** token `{floor}` (e.g. H0 = ground floor, H1 = 1st floor … or S2/S3). Floors from Home Assistant are imported; a device's floor follows its room/HA area but can be overridden.
+- **House letter + floor (H0, H1, S2 …):** pattern `{house}{floor}-{room}-{type}{nr}` → `H1-wzfl-lband01`, `S2-wzfl-lband01`; one-click preset in the scheme tab; a house can be set per gateway.
+- **Rooms from Home Assistant:** all HA areas are imported as rooms (abbreviation suggested and editable); devices get their HA area preselected.
+- **Recognise existing names:** the add-on splits names by your pattern and abbreviations (e.g. `H1-WZFL-KON03` → house/floor H1, room WZFL, type KON, no. 03). A fitting name stays as it is including its number ("✓ aktuell"); new numbers only fill free slots.
+- **House/floor in the name takes precedence**, and rooms are only chosen when their code fits (an area "Bad (H1)" is never assigned to an S2 device).
+- Planned devices reserve names/numbers. CSV/JSON export, scheme export/import.
+</details>
+
+<details>
+<summary><b>Renaming: Zigbee2MQTT, ZHA, Matter</b></summary>
+
+- **Zigbee2MQTT:** renamed like Z2M's own dialog (friendly name, MQTT topic and – with "Entity-IDs in HA anpassen" – entity IDs, `homeassistant_rename`). The add-on waits for Z2M's reply and for Home Assistant to pick up the device again, then updates HA (old custom name removed, area set last).
+- **Several Zigbee2MQTT instances:** the add-on asks MQTT (`<base>/bridge/devices`) which instance the device really belongs to and detects base topics itself (`<base>/bridge/info`).
+- **ZHA and Matter:** renamed in Home Assistant's device registry (`name_by_user`), including entity IDs, references and area. Matter devices are listed under the "Matter" gateway with their node ID; pairing still happens in the Home Assistant app.
+- **Set the room in Home Assistant** ("Raum als Bereich in HA setzen", default on); missing areas are created. Assigning a room also works without renaming.
+- **Independent options:** rename in Zigbee2MQTT, rename entity IDs, update references (default on), YAML files, Node-RED flows.
+- **Verification** with ✅/⚠️/❌ for device names (also in Z2M), entity IDs and leftover references; a rename that did not happen is reported explicitly.
+</details>
+
+<details>
+<summary><b>Cleaning up entity IDs and references</b></summary>
+
+- **Entity IDs with the area in front:** Home Assistant creates new entity IDs as `<area>_<device>_<entity>` (`light.wohnzimmer_s2_wzel03`). The add-on recognises that prefix (also a former area); for Zigbee2MQTT it reads the suffix from the unique ID – result: `light.s2_wzel_lsp03`.
+- **"Alte Entity-IDs" / "⚠ Entity-IDs angleichen":** named devices whose entity IDs still carry the pairing name; renames only the IDs.
+- **"Doppelte Entitäten":** if the correct ID already exists (a leftover from a former name), both are shown with their state (active/orphaned/disabled) and usage. Orphaned or disabled leftovers can be removed, references are switched; active entities are never removed.
+- **"🔍 Verweise prüfen":** finds automations, scripts, scenes and dashboards with entities that no longer exist. Replace via a search field (name/ID, several words), suggestions from the log of all renames; entities that no longer exist can be removed from scenes. Only the ID is replaced, a backup is made first.
+- **Update references:** uses the entity IDs Home Assistant actually has after renaming. UI-managed automations, scripts, scenes and dashboards, optionally **YAML files** under `/config` and **Node-RED flows**. `.storage`, `custom_components` and `secrets.yaml` are never touched.
+</details>
+
+<details>
+<summary><b>💡 Blink and reassign (swapped spots)</b></summary>
+
+- **"💡" per device** makes it blink – identify button (Matter, ZHA), the Zigbee2MQTT "blink" effect (does not change the state), or a short flash of the lamp.
+- **"💡 Neu zuordnen":** select devices (e.g. via the room + type filters). They blink one after another and you pick the name of each position; choosing a name another device has swaps the two (swap or rotation).
+- Device name, Zigbee2MQTT name, entity IDs, house/floor/room/type and the area follow the name – also between Matter and Zigbee. **Automations, scenes and dashboards stay unchanged** and then control the right position. If the other device lacks an entity (e.g. Matter ↔ Zigbee), the preview warns.
+- Uses temporary names, with preview, backup and verification; if the first step fails it is rolled back.
+</details>
+
+<details>
+<summary><b>Gateways, pairing, deleting</b></summary>
+
+- **"Gateways" tab:** every Zigbee2MQTT instance (and ZHA, Matter) with label, MQTT base topic and house. "4 Min anlernen" opens the network for pairing, with countdown.
+- **Jump to a device:** "ⓘ Z2M" opens it in the Zigbee2MQTT UI, "⌂ HA" opens the device page in Home Assistant.
+- **Delete devices completely:** Zigbee2MQTT devices leave the network and are removed from Z2M, ZHA devices via `zha.remove`, Matter devices are removed from Home Assistant's Matter fabric. Nothing happens until you type **LÖSCHEN**. The ZHA coordinator is protected.
+</details>
+
+<details>
+<summary><b>Network (Zigbee2MQTT)</b></summary>
+
+- The network as a collapsible tree – who hangs on whom and how good the link is (LQI green ≥ 150, yellow 80–149, orange 30–79, red < 30; thresholds adjustable).
+- Routers hang on the best path to the coordinator, end devices on their parent; routers in range can be expanded; devices without a link are grouped under "Nicht verbunden".
+- Search, weak-link and device-type filters, instance switcher, details on click. "Scan starten" requests the network map on demand; every map Zigbee2MQTT sends is picked up automatically. **Better connection:** re-pair an end device via a chosen router.
+</details>
+
+<details>
+<summary><b>Backups</b></summary>
+
+- Naming scheme, assignments, planned devices, gateways and the device list are backed up – after changes at most hourly, daily and before every rename, area assignment, swap, delete and restore (the last 60 are kept).
+- Location: `/config/zigbee_devices_manager/backups` – survives reinstalling the add-on and is part of every HA backup. Missing settings are restored automatically at start.
+- "Export" tab: list of backups, back up now, restore, download as JSON or the device list as CSV, restore from a file.
+</details>
+
+## Versions
+
+Changes per version are listed in the **[changelog](zigbee_devices_manager/CHANGELOG.md)** (German) – Home Assistant shows the same text in the update dialog. Every version also has a **[release](https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager/releases)** with the demo for download.
+
+## Development
+
+```sh
+cd zigbee_devices_manager && python3 server.py          # without HA the UI falls back to demo mode
+python3 -m unittest discover -s test                    # tests (renaming, entity IDs, references, swapping)
+node --test test/zigbee-tree.test.mjs                   # tests of the network tab
+python3 scripts/build_demo.py                           # rebuild the demo
+node scripts/screenshots.js                             # images for this page (needs Playwright)
+```
+
+- After code changes the `version` in `zigbee_devices_manager/config.yaml` must go up, otherwise Home Assistant offers no update. Every version needs a `## <version>` section in `zigbee_devices_manager/CHANGELOG.md`; merging creates the release `vX.Y.Z` from it automatically.
+- The browser demo is published via GitHub Pages on every merge (enable once: *Settings → Pages → Source: GitHub Actions*).

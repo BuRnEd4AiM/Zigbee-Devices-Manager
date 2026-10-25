@@ -571,7 +571,8 @@ const api = {
   async reassignPlan(items) {
     if (this.demo) {
       const slug = t => t.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-      return {skipped: [], areas: items.filter(i => i.area_id && i.area_id !== i.current_area_id).map(i => ({device: i.old_name, from: i.current_area, to: i.area_name})),
+      return {skipped: [], lost: items.length > 1 ? [{id: `button.${slug(items[0].old_name)}_identify`, used_in: ["Szene „Abends“"]}] : [],
+        areas: items.filter(i => i.area_id && i.area_id !== i.current_area_id).map(i => ({device: i.old_name, from: i.current_area, to: i.area_name})),
         entities: items.flatMap(i => [["light", ""], ["button", "_identify"]].map(([dom, suf]) => ({old: `${dom}.${slug(i.old_name)}${suf}`, new: `${dom}.${slug(i.name)}${suf}`})))};
     }
     return this.post("api/reassign/plan", {items});
@@ -1492,6 +1493,9 @@ async function reassignWizard(sel) {
       <p class="sub" style="margin-top:12px">Entity-IDs wechseln mit dem Namen (${plan.entities.length}):</p>
       <div class="preview" style="max-height:150px;overflow:auto">${plan.entities.map(e => `${esc(e.old)} → <b>${esc(e.new)}</b>`).join("<br>") || "keine"}</div>
       ${plan.skipped.length ? `<p class="sub">⚠ Übersprungen (ID gehört einem anderen Gerät): ${plan.skipped.map(x => esc(x.old)).join(", ")}</p>` : ""}
+      ${(plan.lost || []).length ? `<div class="banner" style="border-left-color:var(--new);margin:12px 0 0;color:var(--fg)"><b>⚠ ${plan.lost.length} Entity-ID(s) gibt es danach nicht mehr</b> – das andere Gerät hat diese Entität nicht (z. B. Matter ↔ Zigbee):
+        <div class="sub" style="max-height:110px;overflow:auto;margin:4px 0">${plan.lost.map(x => `<code>${esc(x.id)}</code>${x.used_in.length ? ` – <b>verwendet in ${x.used_in.map(esc).join(", ")}</b>` : ""}`).join("<br>")}</div>
+        ${plan.lost.some(x => x.used_in.length) ? "Danach mit „🔍 Verweise prüfen“ ersetzen oder aus Szenen entfernen." : "Nichts davon wird in Automationen, Szenen oder Dashboards verwendet."}</div>` : ""}
       ${plan.areas.length ? `<p class="sub" style="margin-top:12px">Bereich in Home Assistant (folgt dem Namen):</p><div class="preview">${plan.areas.map(a => `${esc(a.device)}: ${esc(a.from || "–")} → <b>${esc(a.to)}</b>`).join("<br>")}</div>` : ""}
       <div class="banner" style="border-left-color:var(--ok);margin:12px 0 0;color:var(--fg)"><b>Automationen, Szenen und Dashboards bleiben unverändert.</b> Sie nennen die Namen bzw. IDs – und die gehören danach dem Gerät, das wirklich an diesem Platz hängt.</div>
       <p class="sub">${S.renameZ2m ? "Zigbee2MQTT-Geräte werden auch in Zigbee2MQTT umbenannt. " : ""}Vorher wird gesichert. Erst bekommen alle Geräte einen Zwischennamen, dann ihren neuen – so kollidiert nichts; geht der erste Schritt schief, wird er zurückgenommen.</p>
