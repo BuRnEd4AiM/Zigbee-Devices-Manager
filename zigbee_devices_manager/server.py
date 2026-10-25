@@ -994,8 +994,10 @@ async def dedupe_entities(request):
 
 
 def ekey(ent):
-    """Bleibt beim Umbenennen gleich (auch wenn Z2M die Entität löscht und neu anlegt): Plattform + eindeutige ID."""
-    return ent.get("platform"), ent.get("unique_id")
+    """Bleibt beim Umbenennen gleich (auch wenn Z2M die Entität löscht und neu anlegt): Typ + Plattform + eindeutige ID.
+    Der Typ gehört dazu: Zigbee2MQTT legt für eine einstellbare Eigenschaft (z. B. device_mode) eine Auswahl und einen
+    Sensor mit derselben unique_id an – ohne Typ würden die beiden verwechselt."""
+    return ent["entity_id"].partition(".")[0], ent.get("platform"), ent.get("unique_id")
 
 
 async def entity_ids_by_key():
@@ -1264,6 +1266,35 @@ async def repair_references(request):
     if not mapping:
         raise web.HTTPBadRequest(text="Keine gültige Zuordnung – das Ziel muss eine vorhandene Entität sein")
     changed, _, _, errors = await replace_references({"update_references": True}, mapping)
+    return web.json_response({"updated_references": changed, "errors": errors, **await broken_references()})
+
+
+async def remove_from_scenes(request):
+    """Entfernt Entitäten, die es nicht mehr gibt, aus Szenen (über die Oberfläche gepflegt) – z. B. Schalter eines Geräts, das
+    jetzt über eine andere Integration eingebunden ist. Nur die Einträge unter entities/metadata verschwinden, der Rest der Szene
+    bleibt; vorhandene Entitäten werden nie entfernt. Vorher gesichert, danach erneut geprüft."""
+    known, _ = await known_entities()
+    ids = {i for i in (await request.json()).get("entity_ids", []) if isinstance(i, str) and ENTITY_REF_RE.fullmatch(i) and i not in known}
+    if not ids:
+        raise web.HTTPBadRequest(text="Keine fehlende Entität angegeben")
+    items, _ = await scan_configs()
+    backup = DATA / "backups" / time.strftime("%Y%m%d-%H%M%S")
+    changed, errors = [], []
+    async with ClientSession(headers={"Authorization": f"Bearer {TOKEN}"}) as http:
+        for it in items:
+            cfg = it["config"]
+            hit = [i for i in ids if any(i in (cfg.get(k) or {}) for k in ("entities", "metadata"))] if it["kind"] == "scene" else []
+            if not hit:
+                continue
+            backup.mkdir(parents=True, exist_ok=True)
+            (backup / f"scene__{slugify(str(it['id'])) or 'default'}.bak").write_text(item_text(it))
+            new_cfg = {k: ({e: v2 for e, v2 in v.items() if e not in ids} if k in ("entities", "metadata") and isinstance(v, dict) else v) for k, v in cfg.items()}
+            async with http.post(f"{CORE_API}/{it['path']}", json=new_cfg) as r:
+                ok, res = r.status == 200, await r.text()
+            if ok:
+                changed.append({"kind": "scene", "title": it["title"], "entities": sorted(hit)})
+            else:
+                errors.append({"device": f"Szene {it['title']}", "error": res})
     return web.json_response({"updated_references": changed, "errors": errors, **await broken_references()})
 
 
@@ -1767,6 +1798,9 @@ async def apply(request):
         after = await entity_ids_by_key()
         renamed = sorted(({"old": before[k], "new": after[k]} for k in mine if k in after and after[k] != before[k]), key=lambda c: c["old"])
         log_renames(renamed)
+    # geplant, aber nicht umbenannt (weder von Z2M noch hier): nie „alles wurde angepasst“ melden
+    done_old = {c["old"] for c in renamed}
+    missed = [c for c in changes if c["old"] not in done_old]
 
     changed_refs, unreadable, notes = [], 0, []
     prog(pid, "Suche Verweise …", 0)
@@ -1775,6 +1809,9 @@ async def apply(request):
         errors += ref_errors
     prog(pid, "Prüfe das Ergebnis …", 0)
     checks = await verify_changes([i for i in items if i["device_id"] not in failed_ids], renamed, body) if not body.get("skip_verify") else []
+    if missed and not body.get("skip_verify"):
+        checks = [c for c in checks if not (c["name"] == "Entity-IDs" and c["status"] == "info")]
+        checks.insert(0, check("Entity-IDs", "fail", "Nicht umbenannt: " + ", ".join(f"{c['old']} → {c['new']}" for c in missed)))
     prog_end(pid)
     return web.json_response({"ok": not errors, "checks": checks, "renamed_devices": done, "renamed_entities": renamed,
                               "skipped": skipped, "updated_references": changed_refs,
@@ -1851,6 +1888,7 @@ def make_app():
         web.post("/api/fix_references", fix_references),
         web.get("/api/references", check_references),
         web.post("/api/references/repair", repair_references),
+        web.post("/api/references/remove_from_scenes", remove_from_scenes),
         web.post("/api/entities/info", entity_info),
         web.post("/api/entities/dedupe", dedupe_entities),
         web.get("/api/progress", progress),

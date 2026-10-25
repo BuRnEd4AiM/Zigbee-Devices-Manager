@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.15.0
+
+*25.10.2026*
+
+- **Korrektur „Entity-IDs angleichen“ meldete Erfolg, änderte aber nichts:** Zigbee2MQTT legt für eine einstellbare Eigenschaft (z. B. `device_mode` beim Hue-Wandschalter-Modul) eine Auswahl *und* einen (meist deaktivierten) Sensor mit derselben eindeutigen Kennung an. Das Add-on hat die beiden verwechselt, hielt `sensor.h1_szfl_sw02_device_mode` für „schon umbenannt“ und meldete „Keine Entity-ID musste geändert werden“ – das Gerät blieb unter „Alte Entity-IDs“, auch nach Neu-Laden oder Hin- und Herbenennen. Jetzt gehört der Typ (sensor, select …) zur Wiedererkennung.
+- Bleibt eine geplante Umbenennung aus, meldet die Prüfung das als Fehler („Nicht umbenannt: … → …“) statt „alles wurde angepasst“.
+- **„Verweise prüfen“: aus Szenen entfernen.** Gibt es eine Entität nicht mehr – z. B. `switch.…_do_not_disturb` einer Lampe, die jetzt über Matter statt Zigbee2MQTT läuft –, findet die Suche keinen Ersatz. Steckt sie in Szenen, lässt sie sich dort per Häkchen entfernen („Alle ohne Ersatz in Szenen markieren“ setzt alle auf einmal). Nur dieser Eintrag verschwindet, der Rest der Szene bleibt; vorhandene Entitäten werden nie entfernt, vorher wird gesichert.
+
 ## 0.14.0
 
 *25.10.2026*
