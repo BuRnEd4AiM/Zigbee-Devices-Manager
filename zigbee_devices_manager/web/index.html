@@ -113,7 +113,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 </main>
 <div class="toast" id="toast"></div>
 
-<script src="zigbee-tree.js?v=0.11.0"></script>
+<script src="zigbee-tree.js?v=0.12.0"></script>
 <script>
 // ---------- Konfiguration / Standarddaten ----------
 const DEMO_FORCED = window.ZDM_DEMO === true;
@@ -170,6 +170,8 @@ const DEMO_MATTER = [
   ["Hue color lamp", "Signify Netherlands B.V.", "LCA001", 8, 11, "Büro", null]
 ].map((d, i) => ({id: "demoM" + i, source: "matter", bridge: "matter", orig_name: d[0], manufacturer: d[1], model: d[2], ieee: "", node: d[3], endpoint: d[4], area: d[5],
   is_new: !d[6], name: d[6] || d[0], area_id: d[5] ? "area_" + d[5].toLowerCase().replace("ü", "ue") : "", config_url: ""}));
+// Benannt, aber die Entity-IDs tragen noch den Namen vom Anlernen – mit Bereich davor, wie Home Assistant neue IDs anlegt
+DEMO_MATTER[1].stale_ids = [{old: "button.wohnzimmer_nanoleaf_essentials_a19_identify", new: "button.wz_lp_02_identify"}, {old: "light.wohnzimmer_nanoleaf_essentials_a19", new: "light.wz_lp_02"}];
 
 // ---------- Hilfsfunktionen ----------
 const $ = (s, el = document) => el.querySelector(s);
@@ -233,6 +235,7 @@ const api = {
     let devices = clone([...DEMO_DEVICES, ...DEMO_MATTER]);
     try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); devices.forEach(d => { if (n[d.id]) { d.name = n[d.id]; d.is_new = false; } }); } catch (e) {}
     try { const gone = JSON.parse(localStorage.getItem("zdm-demo-deleted") || "[]"); devices = devices.filter(d => !gone.includes(d.id)); } catch (e) {}
+    try { const fixed = JSON.parse(localStorage.getItem("zdm-demo-ids") || "[]"); devices.forEach(d => { if (fixed.includes(d.id)) d.stale_ids = []; }); } catch (e) {}
     return {devices, store, bridges: DEMO_BRIDGES, areas: DEMO_AREAS, floors: DEMO_FLOORS};
   },
   async saveStore(store) {
@@ -250,8 +253,13 @@ const api = {
     if (!r.ok) throw new Error(await r.text());
     return r.json();
   },
-  async plan(list) {
+  async plan(list, extra = {}) {
     if (this.demo) {
+      if (extra.entities_only) {
+        const entities = list.flatMap(([d]) => (d.stale_ids || []).filter(c => !c.reason));
+        return {entities, skipped: list.flatMap(([d]) => (d.stale_ids || []).filter(c => c.reason)), usages: [], unreadable: 0, notes: [], areas: [],
+          unhandled: S.updateRefs ? [] : [{kind: "dashboard", title: "Licht", entities: entities.map(e => e.old)}]};
+      }
       const slug = t => t.toLowerCase().replace(/ä/g, "a").replace(/ö/g, "o").replace(/ü/g, "u").replace(/ß/g, "ss").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
       const entities = list.flatMap(([d, name]) => [["light", ""], ["sensor", "_battery"]].map(([dom, suf]) => ({old: `${dom}.${slug(d.name)}${suf}`, new: `${dom}.${slug(name)}${suf}`})));
       const o = this.opts(), usages = [];
@@ -262,17 +270,19 @@ const api = {
       const unhandled = o.update_references ? [] : [{kind: "dashboard", title: "Übersicht", entities: entities.map(e => e.old)}];
       return {entities, skipped: [], usages, unhandled, unreadable: 0, notes: [], areas};
     }
-    return this.post("api/plan", {items: this.payload(list), ...this.opts()});
+    return this.post("api/plan", {items: this.payload(list), ...this.opts(), ...extra});
   },
-  async apply(list, progressId) {
+  async apply(list, progressId, extra = {}) {
     if (this.demo) {
       try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); list.forEach(([d, name]) => n[d.id] = name); localStorage.setItem("zdm-demo-names", JSON.stringify(n)); } catch (e) {}
+      // Demo: angeglichene Entity-IDs gelten als erledigt (wie nach einem Neu-Laden aus HA)
+      try { const f = JSON.parse(localStorage.getItem("zdm-demo-ids") || "[]"); localStorage.setItem("zdm-demo-ids", JSON.stringify([...f, ...list.map(([d]) => d.id)])); } catch (e) {}
       await new Promise(r => setTimeout(r, 2800));
       const res = {ok: true, errors: [], renamed_entities: [], updated_references: []};
-      res.checks = this.demoChecks({items: list, opts: this.opts()});
+      res.checks = this.demoChecks({items: list, opts: {...this.opts(), ...extra}});
       return res;
     }
-    return this.post("api/apply", {items: this.payload(list), ...this.opts(), progress_id: progressId});
+    return this.post("api/apply", {items: this.payload(list), ...this.opts(), ...extra, progress_id: progressId});
   },
   async permit(b, seconds) {
     if (this.demo) return;
@@ -304,6 +314,24 @@ const api = {
   async fixReferences(last) {
     if (this.demo) return {updated_references: [{kind: "dashboard", title: "Übersicht"}], errors: [], checks: [{name: "Verweise", status: "ok", detail: "Beispiel: keine alten Entity-IDs mehr gefunden"}]};
     return this.post("api/fix_references", {items: last.items, renamed: last.renamed, ...last.opts});
+  },
+  // ---- Verweise auf fehlende Entitäten finden und ersetzen ----
+  async checkRefs() {
+    if (this.demo) {
+      const fixed = (() => { try { return JSON.parse(localStorage.getItem("zdm-demo-refs") || "[]"); } catch (e) { return []; } })();
+      const missing = ["light.wohnzimmer_stehlampe", "light.wohnzimmer_nanoleaf_essentials_a19"].filter(m => !fixed.includes(m));
+      return {items: missing.length ? [{kind: "dashboard", id: "licht", title: "Licht", entities: missing}] : [], missing, scanned: 7, unreadable: 0,
+        suggestions: {"light.wohnzimmer_nanoleaf_essentials_a19": "light.wz_lp_02"},
+        choices: {light: [["light.wz_lp_02", "WZ_LP_02"], ["light.wz_lp_05", "WZ_LP_05"], ["light.ku_lp_01", "KU_LP_01"]].map(([id, name]) => ({id, name}))}};
+    }
+    const r = await fetch("api/references"); if (!r.ok) throw new Error(await r.text()); return r.json();
+  },
+  async repairRefs(mapping) {
+    if (this.demo) {
+      try { const f = JSON.parse(localStorage.getItem("zdm-demo-refs") || "[]"); localStorage.setItem("zdm-demo-refs", JSON.stringify([...f, ...Object.keys(mapping)])); } catch (e) {}
+      return {...await this.checkRefs(), updated_references: [{kind: "dashboard", title: "Licht"}], errors: []};
+    }
+    return this.post("api/references/repair", {mapping});
   },
   // ---- Löschen: Vorschau, Ausführung, erneute Prüfung ----
   delPayload: list => list.map(d => ({device_id: d.id, name: d.name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || ""})),
@@ -359,23 +387,23 @@ const api = {
     await this.post("api/backups/restore", payload);
   },
   demoChecks(last) {
-    const o = last.opts, c = [{name: "Gerätenamen", status: "ok", detail: last.items.length + " Gerät(e) heißen jetzt wie geplant"}];
-    if (o.rename_z2m) c.push({name: "Zigbee2MQTT", status: "ok", detail: last.items.length + " Gerät(e) heißen auch in Zigbee2MQTT wie geplant"});
+    const o = last.opts, c = o.skip_names ? [] : [{name: "Gerätenamen", status: "ok", detail: last.items.length + " Gerät(e) heißen jetzt wie geplant"}];
+    if (o.rename_z2m && !o.skip_names) c.push({name: "Zigbee2MQTT", status: "ok", detail: last.items.length + " Gerät(e) heißen auch in Zigbee2MQTT wie geplant"});
     if (o.rename_entities) c.push({name: "Entity-IDs", status: "ok", detail: "Beispiel: alte IDs gibt es nicht mehr"});
     if (o.update_references || o.update_yaml || o.update_nodered) c.push({name: "Verweise", status: "ok", detail: "Beispiel: keine alten Entity-IDs mehr gefunden"});
     else if (o.rename_entities) c.push({name: "Verweise", status: "warn", fix: true, detail: "Nicht angepasst (Haken aus) – diese zeigen jetzt ins Leere: Dashboard „Übersicht“ (Beispiel)"});
     if (o.update_nodered) c.push({name: "Node-RED", status: "info", detail: "Node-RED jetzt neu starten"});
-    if (o.set_area) c.push({name: "Bereiche (Räume)", status: "ok", detail: "Beispiel: Geräte sind dem gewählten Bereich zugeordnet"});
+    if (o.set_area && !o.skip_names) c.push({name: "Bereiche (Räume)", status: "ok", detail: "Beispiel: Geräte sind dem gewählten Bereich zugeordnet"});
     return c;
   }
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], z2mUis: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, storeLoaded: false, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: false, updateYaml: false, updateNodered: false, deleteForce: true};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], z2mUis: [], bridges: [], gateways: {}, gwFilter: "", permitUntil: {}, permitReal: {}, editing: null, storeLoaded: false, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: true, updateYaml: false, updateNodered: false, deleteForce: true};
 /** Haken beim Umbenennen und Löschen – werden im Store gemerkt. */
 const OPTION_KEYS = ["setArea", "renameZ2m", "renameEntities", "updateRefs", "updateYaml", "updateNodered", "deleteForce"];
 
-const storeData = () => ({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways, options: Object.fromEntries(OPTION_KEYS.map(k => [k, S[k]])), network: S.network});
+const storeData = () => ({scheme: S.scheme, meta: S.meta, planned: S.planned, gateways: S.gateways, options: Object.fromEntries(OPTION_KEYS.map(k => [k, S[k]])), optionsRev: 2, network: S.network});
 function persist() {
   // Konnten die gespeicherten Einstellungen nicht geladen werden (HA nicht erreichbar), würde Speichern sie mit Standardwerten überschreiben
   if (!S.storeLoaded) return;
@@ -446,6 +474,8 @@ const typeOf = d => S.scheme.types.find(t => t.id === S.meta[d.id]?.type);
 const gwOf = d => S.gateways[d.bridge] || {};
 /** Kennung des Geräts: IEEE bei Zigbee, Node-ID (hinter einer Matter-Bridge mit Endpunkt) bei Matter. */
 const addrOf = d => d.source !== "matter" ? d.ieee || "" : d.node == null ? "" : "Node " + d.node + (d.endpoint == null ? "" : " · Endpunkt " + d.endpoint);
+/** Benanntes Gerät, dessen Entity-IDs noch nicht zum Namen passen (z. B. light.wohnzimmer_s2_wzel03 bei S2-WZEL-LSP03). */
+const staleIds = d => !d.planned && !d.is_new ? d.stale_ids || [] : [];
 const houseOf = d => S.scheme.houses.find(h => h.id === (S.meta[d.id]?.house || gwOf(d).house || S.scheme.defaultHouse));
 const useHouse = () => S.scheme.pattern.includes("{house}");
 const useFloor = () => S.scheme.pattern.includes("{floor}");
@@ -626,6 +656,7 @@ function renderDevices() {
     if (S.filter === "named" && (d.is_new || d.planned)) return false;
     if (S.filter === "planned" && !d.planned) return false;
     if (S.filter === "odd" && (d.is_new || d.planned || parseName(d.name))) return false;
+    if (S.filter === "ids" && !staleIds(d).length) return false;
     if (S.gwFilter && d.bridge !== S.gwFilter) return false;
     return !q || [d.name, d.orig_name, addrOf(d), d.model, d.manufacturer, d.area, SOURCE_NAMES[d.source]].join(" ").toLowerCase().includes(q);
   });
@@ -635,15 +666,19 @@ function renderDevices() {
   const typeOpts = sel => `<option value="">–</option>` + S.scheme.types.map(t => `<option value="${t.id}"${t.id === sel ? " selected" : ""}>${esc(t.abbr)} · ${esc(t.name)}</option>`).join("");
   const counts = {all: allRows().length, new: allRows().filter(d => d.is_new).length};
   const applicable = rows.filter(d => sug.has(d.id) && sug.get(d.id) !== d.name && (!S.sel.size || S.sel.has(d.id)));
+  // Entity-IDs angleichen: nur ohne ausstehende Umbenennung – die zieht die IDs ohnehin mit
+  const idsDue = d => staleIds(d).length && !(sug.has(d.id) && sug.get(d.id) !== d.name);
+  const staleAll = allRows().filter(idsDue).length, staleRows = rows.filter(d => idsDue(d) && (!S.sel.size || S.sel.has(d.id)));
   const multiGw = S.bridges.length > 1, gwLabel = id => S.gateways[id]?.label || S.bridges.find(b => b.id === id)?.name || "";
 
   $("#tab-devices").innerHTML = `
     <div class="bar">
       <input id="q" type="search" placeholder="Suchen (Name, IEEE, Modell, Raum)…" value="${esc(S.q)}" style="width:280px">
-      <div class="chips">${[["all", "Alle"], ["new", "Neu (" + counts.new + ")"], ["named", "Benannt"], ["odd", "Passt nicht (" + allRows().filter(d => !d.is_new && !d.planned && !parseName(d.name)).length + ")"], ["planned", "Geplant"]].map(([k, l]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}">${l}</button>`).join("")}</div>
+      <div class="chips">${[["all", "Alle"], ["new", "Neu (" + counts.new + ")"], ["named", "Benannt"], ["odd", "Passt nicht (" + allRows().filter(d => !d.is_new && !d.planned && !parseName(d.name)).length + ")"], ["planned", "Geplant"], ...(staleAll || S.filter === "ids" ? [["ids", "Alte Entity-IDs (" + staleAll + ")"]] : [])].map(([k, l]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}">${l}</button>`).join("")}</div>
       ${multiGw ? `<select id="gwf"><option value="">Alle Gateways</option>${S.bridges.map(b => `<option value="${esc(b.id)}"${S.gwFilter === b.id ? " selected" : ""}>${esc(gwLabel(b.id))}</option>`).join("")}</select>` : ""}
       <span style="flex:1"></span>
       <button class="btn" id="fromNames" title="Liest Haus, Etage, Raum und Typ aus den vorhandenen Namen (nach deinen Kürzeln) und wählt sie aus. Passende Namen bleiben unverändert.">⟳ Aus Namen zuordnen</button>
+      <button class="btn" id="checkRefs" title="Sucht in Automationen, Skripten, Szenen und Dashboards nach Entitäten, die es nicht mehr gibt (z. B. nach einer Umbenennung), und ersetzt sie durch die richtigen">🔍 Verweise prüfen</button>
       <button class="btn" id="reload" title="Liest alle Geräte neu aus Home Assistant">↻ Neu laden</button>
       <button class="btn" id="addPlanned">＋ Neues Gerät planen</button>
     </div>
@@ -663,6 +698,7 @@ function renderDevices() {
       <label class="sub" title="Ersetzt die alten Entity-IDs in Automationen, Skripten, Szenen und Dashboards (mit Sicherung). Setzt den Haken bei „Entity-IDs“ automatisch mit."><input type="checkbox" id="rRef" ${S.updateRefs && S.renameEntities ? "checked" : ""}> Verweise in Automationen/Dashboards anpassen</label>
       <label class="sub" title="Ersetzt die alten Entity-IDs in allen YAML-Dateien unter /config (Packages, configuration.yaml, …). Danach Konfiguration prüfen und neu laden. Setzt den Haken bei „Entity-IDs“ automatisch mit."><input type="checkbox" id="rYaml" ${S.updateYaml && S.renameEntities ? "checked" : ""}> YAML-Dateien anpassen</label>
       <label class="sub" title="Ersetzt die alten Entity-IDs in den Node-RED-Flows. Node-RED danach neu starten. Setzt den Haken bei „Entity-IDs“ automatisch mit."><input type="checkbox" id="rNode" ${S.updateNodered && S.renameEntities ? "checked" : ""}> Node-RED-Flows anpassen</label>
+      ${staleAll ? `<button class="btn" id="fixAll" ${staleRows.length ? "" : "disabled"} title="Benennt die Entity-IDs benannter Geräte nach ihrem Namen um, z. B. light.wohnzimmer_s2_wzel03 → light.s2_wzel_lsp03. Name und Bereich bleiben. Mit Vorschau.">Entity-IDs angleichen (${staleRows.length})</button>` : ""}
       <button class="btn primary" id="applyAll" ${applicable.length ? "" : "disabled"}>${applicable.length} ${S.sel.size ? "ausgewählte " : ""}Vorschläge übernehmen</button>
     </div>
     <div class="card"><table>
@@ -676,7 +712,7 @@ function renderDevices() {
         return `<tr data-id="${d.id}">
           <td><input type="checkbox" class="sel" ${S.sel.has(d.id) ? "checked" : ""}></td>
           <td class="name" title="Klicken zum Bearbeiten">${nameCell}</td>
-          <td>${!d.planned && r && r.id !== undefined && (r.area_id ? r.area_id !== d.area_id : r.name.toLowerCase() !== (d.area || "").toLowerCase()) ? `<button class="btn setArea" title="Nur den Raum in Home Assistant setzen, Name bleibt">Raum setzen</button> ` : ""}${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}</td>
+          <td>${!d.planned && r && r.id !== undefined && (r.area_id ? r.area_id !== d.area_id : r.name.toLowerCase() !== (d.area || "").toLowerCase()) ? `<button class="btn setArea" title="Nur den Raum in Home Assistant setzen, Name bleibt">Raum setzen</button> ` : ""}${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}${idsDue(d) ? `<div><button class="btn fixIds" title="${esc("Entity-IDs passen nicht zum Namen:\n" + staleIds(d).map(c => c.old + " → " + c.new + (c.reason ? " (" + c.reason + ")" : "")).join("\n"))}">⚠ Entity-IDs angleichen (${staleIds(d).length})</button></div>` : ""}</td>
           ${multiGw ? `<td class="sub">${esc(d.planned ? "" : gwLabel(d.bridge))}</td>` : ""}
           <td><select class="house">${houseOpts(houseOf(d)?.id)}</select></td>
           <td><select class="floor">${floorOpts(floorOf(d)?.id)}</select></td>
@@ -710,6 +746,7 @@ function renderDevices() {
     renderDevices();
   };
   $("#reload", root).onclick = async () => { await refreshFromHA(); renderDevices(); };
+  $("#checkRefs", root).onclick = () => checkReferences();
   $("#addPlanned", root).onclick = () => {
     const name = prompt("Name des geplanten Geräts (wird reserviert, damit die Nummer nicht doppelt vergeben wird):");
     if (name?.trim()) { S.planned.push({id: uid("p_"), name: name.trim()}); persist(); renderDevices(); }
@@ -721,6 +758,7 @@ function renderDevices() {
     S.sel.forEach(id => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type}), ...(house && {house}), ...(floor && {floor})}; });
     persist(); renderDevices();
   };
+  $("#fixAll", root) && ($("#fixAll", root).onclick = () => fixEntityIds(staleRows));
   $("#applyAll", root).onclick = async () => {
     const n = await applyBatch(applicable.map(d => [d, sug.get(d.id)]));
     if (n) toast(n + " Namen übernommen"); renderDevices();
@@ -733,6 +771,7 @@ function renderDevices() {
     $(".room", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], room: e.target.value}; persist(); renderDevices(); };
     $(".type", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], type: e.target.value}; persist(); renderDevices(); };
     $(".setArea", tr) && ($(".setArea", tr).onclick = () => assignAreas([d]));
+    $(".fixIds", tr) && ($(".fixIds", tr).onclick = () => fixEntityIds([d]));
     $(".lnk.ha", tr) && ($(".lnk.ha", tr).onclick = e => haNavigate(e, haDevicePath(d)));
     $(".lnk.z2m", tr) && ($(".lnk.z2m", tr).onclick = e => openZ2m(e, z2mLink(d)));
     $(".lnk.off", tr) && ($(".lnk.off", tr).onclick = () => showTab("gateways"));
@@ -755,17 +794,19 @@ function renderDevices() {
   }
 }
 
-/** Zeigt die geplanten Änderungen und wartet auf Bestätigung. */
-function confirmPlan(plan, count, areaOnly = false) {
+/** Zeigt die geplanten Änderungen und wartet auf Bestätigung. mode: "rename" (Umbenennen), "area" (nur Raum), "ids" (nur Entity-IDs angleichen). */
+function confirmPlan(plan, count, mode = "rename") {
   return new Promise(resolve => {
     const kinds = {automation: "Automation", script: "Skript", scene: "Szene", dashboard: "Dashboard", yaml: "YAML", nodered: "Node-RED"};
+    const areaOnly = mode === "area", idsOnly = mode === "ids", ents = !areaOnly && (S.renameEntities || idsOnly);
     const refs = !areaOnly && (S.updateRefs || S.updateYaml || S.updateNodered);
     const dlg = document.createElement("dialog");
     dlg.style.cssText = "max-width:640px;width:92%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
-    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${count} Gerät(e) ${areaOnly ? "einem Raum zuweisen" : "umbenennen"}</h2>
+    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${count} Gerät(e) ${areaOnly ? "einem Raum zuweisen" : idsOnly ? "– Entity-IDs an den Namen angleichen" : "umbenennen"}</h2>
+      ${idsOnly ? `<p class="sub">Gerätenamen und Bereiche bleiben, wie sie sind. Danach findest du die Entitäten in Home Assistant unter ihrem Namen${plan.entities.length ? ` (z. B. <code>${esc(plan.entities.map(e => e.new).sort((a, b) => a.length - b.length)[0])}</code>)` : ""}.</p>` : ""}
       ${(plan.areas || []).length ? `<p class="sub">Bereich in Home Assistant (${plan.areas.length}):</p>
       <div class="preview" style="max-height:140px;overflow:auto">${plan.areas.map(a => `${esc(a.device)}: ${esc(a.from || "–")} → <b>${esc(a.to)}</b>${a.create ? ` <span class="sub">(wird neu angelegt)</span>` : ""}`).join("<br>")}</div>` : ""}
-      ${!areaOnly && S.renameEntities ? `<p class="sub" style="margin-top:12px">Entity-IDs, die sich ändern (${plan.entities.length}):</p>
+      ${ents ? `<p class="sub" style="margin-top:12px">Entity-IDs, die sich ändern (${plan.entities.length}):</p>
       <div class="preview" style="max-height:160px;overflow:auto">${plan.entities.map(e => `${esc(e.old)} → <b>${esc(e.new)}</b>`).join("<br>") || (plan.entity_info || []).map(i => {
         const list = (i.entities || []).map(esc).join(", ") + (i.count > (i.entities || []).length ? " …" : "");
         return `<b>${esc(i.device)}</b>: ` + (i.reason === "already" ? `die Entity-IDs enthalten den neuen Namen schon – nichts zu ändern<br><span class="sub">${list}</span>`
@@ -780,11 +821,11 @@ function confirmPlan(plan, count, areaOnly = false) {
       ${S.updateNodered ? `<p class="sub">Node-RED danach neu starten, sonst überschreibt ein Deploy die Änderung.</p>` : ""}
       ${S.updateYaml ? `<p class="sub">YAML geändert: danach Konfiguration prüfen und neu laden.</p>` : ""}
       <p class="sub">Vorher wird eine Sicherung der geänderten Konfigurationen unter /data/backups abgelegt.</p>` : ""}
-      ${!areaOnly && S.renameEntities && !S.updateRefs && (plan.unhandled || []).length ? `<div class="banner" style="border-left-color:var(--new);margin:12px 0 0;color:var(--fg)">
+      ${ents && !S.updateRefs && (plan.unhandled || []).length ? `<div class="banner" style="border-left-color:var(--new);margin:12px 0 0;color:var(--fg)">
         <b>⚠ ${plan.unhandled.length} Automation(en)/Dashboard(s) verwenden diese Entity-IDs</b> und zeigen danach ins Leere, wenn sie nicht angepasst werden:
         <div class="sub" style="max-height:90px;overflow:auto;margin:4px 0">${plan.unhandled.map(u => `${kinds[u.kind] || u.kind}: <b>${esc(u.title)}</b> (${u.entities.length})`).join("<br>")}</div>
         <label><input type="checkbox" id="fixRefs" checked> Verweise in Automationen, Skripten, Szenen und Dashboards mit anpassen (vorher gesichert)</label></div>` : ""}
-      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="no">Abbrechen</button><button class="btn primary" id="yes">${areaOnly ? "Zuweisen" : "Umbenennen"}</button></div>`;
+      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="no">Abbrechen</button><button class="btn primary" id="yes" ${idsOnly && !plan.entities.length ? "disabled" : ""}>${areaOnly ? "Zuweisen" : idsOnly ? "Angleichen" : "Umbenennen"}</button></div>`;
     document.body.appendChild(dlg); dlg.showModal();
     const end = v => { dlg.close(); dlg.remove(); resolve(v); };
     $("#no", dlg).onclick = () => end(false);
@@ -860,7 +901,7 @@ async function assignAreas(devs) {
   try {
     const plan = await api.planAreas(list);
     if (!plan.areas?.length) { toast("Alle gewählten Geräte sind schon im richtigen Bereich"); return; }
-    if (!await confirmPlan(plan, plan.areas.length, true)) return;
+    if (!await confirmPlan(plan, plan.areas.length, "area")) return;
     const res = await api.assignAreas(list);
     adoptAreas(res.items);
     await refreshFromHA(true);
@@ -986,6 +1027,64 @@ async function applyBatch(items) {
     } catch (e) { toast("Fehler: " + e.message); return 0; }
   }
   persist(); return items.length;
+}
+
+/** „Verweise prüfen“: Automationen, Skripte, Szenen und Dashboards, die Entitäten nennen, die es nicht (mehr) gibt –
+ *  je alte ID die heute gemeinte Entität wählen (Vorschlag aus dem Verlauf der Umbenennungen) und ersetzen. */
+async function checkReferences() {
+  const kinds = {automation: "Automation", script: "Skript", scene: "Szene", dashboard: "Dashboard"};
+  const dlg = document.createElement("dialog");
+  dlg.style.cssText = "max-width:720px;width:94%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
+  const close = () => { dlg.close(); dlg.remove(); };
+  const draw = (r, note = "") => {
+    if (!r) { dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">🔍 Verweise prüfen</h2><p class="sub"><span class="spin"></span> Durchsuche Automationen, Skripte, Szenen und Dashboards …</p>`; return; }
+    const where = id => r.items.filter(i => i.entities.includes(id)).map(i => `${kinds[i.kind] || i.kind} „${esc(i.title)}“`).join(", ");
+    const opts = id => `<option value="">– Entität wählen –</option>` + (r.choices[id.split(".")[0]] || []).slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, "de", {numeric: true}))
+      .map(c => `<option value="${esc(c.id)}"${r.suggestions[id] === c.id ? " selected" : ""}>${esc(c.name ? c.name + " · " + c.id : c.id)}</option>`).join("");
+    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${r.missing.length ? `⚠ ${r.missing.length} fehlende Entität(en) in ${r.items.length} Automation(en)/Dashboard(s)` : "✅ Keine Verweise auf fehlende Entitäten"}</h2>
+      ${note}
+      <p class="sub">${r.scanned} Automationen, Skripte, Szenen und Dashboards durchsucht (über die Oberfläche gepflegte)${r.unreadable ? `; ${r.unreadable} sind YAML und wurden nicht geprüft` : ""}.</p>
+      ${r.missing.length ? `<p class="sub">Eine Karte wie die Hue-Like-Light-Card zeigt schon bei <b>einer</b> fehlenden Entität nur noch einen Fehler. Wähle je alte ID die Entität, die jetzt gemeint ist. Ersetzt wird nur die ID – Karten und Automationen bleiben sonst unverändert und werden vorher gesichert.</p>
+      <div style="max-height:50vh;overflow:auto">${r.missing.map(id => `<div style="padding:8px 0;border-bottom:1px solid var(--line)">
+        <code>${esc(id)}</code> <span class="sub">in ${where(id)}</span>
+        <div class="row" style="margin:6px 0 0"><span>→</span><select data-old="${esc(id)}" style="flex:1;min-width:0">${opts(id)}</select>${r.suggestions[id] ? `<span class="sub">aus dem Verlauf</span>` : ""}</div></div>`).join("")}</div>` : ""}
+      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="again">Erneut prüfen</button>${r.missing.length ? `<button class="btn primary" id="go">Ersetzen</button>` : ""}<button class="btn" id="close">Schließen</button></div>`;
+    $("#close", dlg).onclick = close;
+    $("#again", dlg).onclick = () => load();
+    $("#go", dlg) && ($("#go", dlg).onclick = async () => {
+      const mapping = Object.fromEntries([...dlg.querySelectorAll("select[data-old]")].filter(x => x.value).map(x => [x.dataset.old, x.value]));
+      if (!Object.keys(mapping).length) { toast("Keine Entität gewählt"); return; }
+      $("#go", dlg).disabled = true; $("#go", dlg).textContent = "Ersetze …";
+      try {
+        const res = await api.repairRefs(mapping);
+        draw(res, `<p>✅ ${res.updated_references.length} Automation(en)/Dashboard(s) angepasst${res.updated_references.length ? ": " + res.updated_references.map(u => esc(u.title)).join(", ") : ""}.</p>`
+          + (res.errors || []).map(e => `<p>❌ <b>${esc(e.device)}</b> <span class="sub">${esc(e.error)}</span></p>`).join(""));
+      } catch (e) { toast("Ersetzen fehlgeschlagen: " + e.message); draw(r, note); }
+    });
+  };
+  const load = async () => { draw(null); try { draw(await api.checkRefs()); } catch (e) { close(); toast("Prüfen fehlgeschlagen: " + e.message); } };
+  document.body.appendChild(dlg); dlg.showModal(); dlg.oncancel = close;
+  await load();
+}
+
+/** Benennt die Entity-IDs benannter Geräte nach ihrem Namen um (z. B. light.wohnzimmer_s2_wzel03 → light.s2_wzel_lsp03) –
+ *  Gerätename und Bereich bleiben. Verweise in Automationen/Dashboards/YAML/Node-RED nach den Haken in der Liste. */
+async function fixEntityIds(devs) {
+  const list = devs.filter(d => staleIds(d).length).map(d => [d, d.name]);
+  if (!list.length) return;
+  const extra = {entities_only: true, rename_entities: true, rename_z2m: false, set_area: false, skip_names: true};
+  try {
+    const plan = await api.plan(list, extra);
+    if (!await confirmPlan(plan, list.length, "ids")) return;
+    extra.update_references = S.updateRefs; // „mit anpassen“ im Dialog setzt den Haken
+    const res = await runWithProgress("Entity-IDs werden angeglichen …", pid => api.apply(list, pid, extra));
+    const failed = new Set((res.errors || []).map(e => e.device_id).filter(Boolean));
+    for (const [d] of list) if (!failed.has(d.id)) d.stale_ids = [];
+    await refreshFromHA(true); // maßgeblich ist, was Home Assistant wirklich hat
+    if (res.errors?.length) toast("Fehler: " + res.errors.map(e => e.device + ": " + e.error).join("; "));
+    await showChecks(res.checks || [], {items: res.items || api.payload(list), renamed: res.renamed_entities || [], opts: {...api.opts(), ...extra}}, res.errors || []);
+  } catch (e) { toast("Fehler: " + e.message); }
+  renderDevices();
 }
 
 // ---------- Gateways-Tab ----------
@@ -1525,6 +1624,8 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   if (st.scheme?.pattern) S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, floors: clone(DEFAULT_SCHEME.floors), ...st.scheme};
   S.meta = st.meta || {}; S.planned = st.planned || []; S.network = st.network || {};
   for (const k of OPTION_KEYS) if (typeof st.options?.[k] === "boolean") S[k] = st.options[k];
+  // Ab 0.12 einmalig: Verweise mit anpassen – sonst zeigen Karten nach dem Umbenennen ins Leere (eine Hue-Like-Card zeigt dann nur noch einen Fehler)
+  if ((st.optionsRev || 0) < 2) S.updateRefs = true;
   S.storeLoaded = !api.error;
   if (api.error) $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--new)"><b>Verbindung zu Home Assistant fehlgeschlagen.</b> Das Add-on läuft, kann aber keine Geräte laden – keine Demo-Daten.<br><code>${esc(api.error)}</code><br><button class="btn" style="margin-top:8px" onclick="location.reload()">Erneut versuchen</button> <a href="api/diag" target="_blank">Diagnose öffnen</a> <span class="sub">(Details auch im Add-on-Log)</span></div>`;
   else if (data.restored) $("#banner").innerHTML = `<div class="banner" style="border-left-color:var(--ok)"><b>Einstellungen wiederhergestellt.</b> Es waren keine gespeicherten Einstellungen vorhanden (z. B. nach einer Neuinstallation) – das Add-on hat den Stand vom ${esc(fmtDate(data.restored.created))} zurückgeholt (${esc(data.restored.source)}). Ältere Stände: Tab „Export“ → Sicherungen.</div>`;

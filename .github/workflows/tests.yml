@@ -13,3 +13,5 @@ jobs:
       # Parser und Baum-Algorithmus des Reiters „Netzwerk“ (ohne npm-Abhängigkeiten)
       - run: node --test test/zigbee-tree.test.mjs
       - run: python3 -m py_compile zigbee_devices_manager/server.py
+      # Umbenennen der Entity-IDs (Bereich vor der ID, Haupt-Entität, alte IDs erkennen)
+      - run: pip install aiohttp && python3 -m unittest discover -s test

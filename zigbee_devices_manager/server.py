@@ -183,6 +183,9 @@ async def get_state(request):
     if not ok:
         floors = []
     out, bridges = collect_devices(devices, areas)
+    ok, entities = await ha_try({"type": "config/entity_registry/list"})
+    if ok:
+        mark_stale_ids(out, entities, devices, areas)
     used = {d["bridge"] for d in out}
     restored = dict(RESTORED)
     RESTORED.clear()  # Hinweis nur einmal zeigen
@@ -818,20 +821,35 @@ def common_prefix(object_ids):
     return "_".join(out)
 
 
-def entity_changes(items, entities):
-    """Bestimmt, welche Entity-IDs sich beim Umbenennen der Geräte ändern würden.
-    Liefert (Änderungen, Übersprungenes, Erklärung je Gerät)."""
+def id_stems(names, area_names, devents):
+    """Mögliche Gerätenamen-Teile am Anfang der Entity-IDs eines Geräts, wichtigste zuerst: alter Name und Name der
+    Integration – auch mit einem Bereich davor, denn Home Assistant legt neue Entity-IDs als <Bereich>_<Gerät>_<Entität> an
+    (z. B. light.wohnzimmer_s2_wzel03) –, dann die ID der Haupt-Entität (ohne eigenen Namen, z. B. das Licht selbst; bei
+    mehreren die kürzeste zuerst) und zuletzt der gemeinsame Anfang aller IDs."""
+    names = [n for n in names if n]
+    objs = [e["entity_id"].partition(".")[2] for e in devents]
+    main = sorted({o for e, o in zip(devents, objs) if "original_name" in e and not e["original_name"]}, key=lambda o: (len(o), o))
+    stems = [slugify(n) for n in names] + [slugify(f"{a} {n}") for a in area_names for n in names] + main + [common_prefix(objs)]
+    return [s for s in dict.fromkeys(stems) if s]
+
+
+def entity_changes(items, entities, devices=(), areas=()):
+    """Bestimmt, welche Entity-IDs sich beim Umbenennen der Geräte ändern würden. devices/areas (Registries) liefern
+    die Bereichsnamen, die Home Assistant vor neue Entity-IDs setzt. Liefert (Änderungen, Übersprungenes, Erklärung je Gerät)."""
     by_dev = {}
     for ent in entities:
         by_dev.setdefault(ent.get("device_id"), []).append(ent)
+    area_names = {a["area_id"]: a["name"] for a in areas}
+    dev_area = {d["id"]: d.get("area_id") for d in devices}
     existing = {e["entity_id"] for e in entities}
     changes, skipped, info = [], [], []
     for it in items:
         new_slug = slugify(it["name"])
         devents = by_dev.get(it["device_id"], [])
         objs = [e["entity_id"].partition(".")[2] for e in devents]
-        candidates = list(dict.fromkeys(
-            c for c in (slugify(it.get("old_name") or ""), slugify(it.get("orig_name") or ""), common_prefix(objs)) if c))
+        # Bereich des Geräts und seiner Entitäten zuerst, dann alle übrigen (das Gerät kann inzwischen umgezogen sein)
+        own = [area_names[a] for a in [dev_area.get(it["device_id"])] + [e.get("area_id") for e in devents] if a in area_names]
+        candidates = id_stems([it.get("old_name"), it.get("orig_name")], list(dict.fromkeys(own + list(area_names.values()))), devents)
         mine = {"device": it["name"], "entities": [e["entity_id"] for e in devents][:6], "count": len(devents), "reason": ""}
         n_before = len(changes) + len(skipped)
         for ent in devents:
@@ -842,10 +860,10 @@ def entity_changes(items, entities):
                     if new_id == ent["entity_id"]:
                         break
                     if new_id in existing:
-                        skipped.append({"old": ent["entity_id"], "new": new_id, "reason": "ID existiert bereits"})
+                        skipped.append({"old": ent["entity_id"], "new": new_id, "reason": "ID existiert bereits", "device_id": it["device_id"]})
                     else:
                         existing.add(new_id)
-                        changes.append({"old": ent["entity_id"], "new": new_id})
+                        changes.append({"old": ent["entity_id"], "new": new_id, "device_id": it["device_id"]})
                     break
         if len(changes) + len(skipped) == n_before:
             if not devents:
@@ -856,6 +874,26 @@ def entity_changes(items, entities):
                 mine["reason"] = "nomatch"    # keine ID beginnt mit dem alten Namen
         info.append(mine)
     return changes, skipped, info
+
+
+async def entity_registries():
+    """Entitäten-, Geräte- und Bereichs-Registry – was entity_changes braucht."""
+    return await ha([{"type": "config/entity_registry/list"}, {"type": "config/device_registry/list"},
+                     {"type": "config/area_registry/list"}])
+
+
+def mark_stale_ids(out, entities, devices, areas):
+    """Benannte Geräte, deren Entity-IDs nicht zum Gerätenamen passen – z. B. noch der Name vom Anlernen über Matter,
+    oft mit dem Bereich davor (light.wohnzimmer_s2_wzel03 statt light.s2_wzel_lsp03). Je Gerät landen die IDs, die
+    „Entity-IDs angleichen“ ändern würde, unter "stale_ids" (mit "reason", wenn die neue ID schon vergeben ist)."""
+    named = [d for d in out if not d["is_new"]]
+    items = [{"device_id": d["id"], "name": d["name"], "old_name": d["name"], "orig_name": d["orig_name"]} for d in named]
+    changes, skipped, _ = entity_changes(items, entities, devices, areas)
+    by_dev = {}
+    for c in changes + skipped:
+        by_dev.setdefault(c["device_id"], []).append({k: v for k, v in c.items() if k != "device_id"})
+    for d in named:
+        d["stale_ids"] = sorted(by_dev.get(d["id"], []), key=lambda c: c["old"])
 
 
 def ekey(ent):
@@ -1041,6 +1079,97 @@ async def collect_usages(body, mapping):
     return find_usages(items, mapping), unreadable, notes
 
 
+# ---------- Verweise auf fehlende Entitäten (z. B. Karten nach einer Umbenennung) ----------
+# Entity-ID im Text; davor kein Punkt/Schrägstrich (Hostnamen, Pfade, states.light.x), dahinter kein weiterer Punkt
+ENTITY_REF_RE = re.compile(r"(?<![\w./:-])([a-z_][a-z0-9_]*)\.([a-z0-9_]+)(?![\w.])")
+RENAME_LOG_KEEP = 5000
+
+
+def rename_log_file():
+    return backup_root() / "entity-id-verlauf.json"
+
+
+def log_renames(renamed):
+    """Merkt sich jede Änderung einer Entity-ID (alt → neu) dauerhaft neben den Sicherungen – so findet „Verweise prüfen“
+    auch später noch das Ziel von Karten und Automationen, die auf eine alte ID zeigen."""
+    if not renamed:
+        return
+    path = rename_log_file()
+    try:
+        entries = json.loads(path.read_text())
+    except (OSError, ValueError):
+        entries = []
+    stamp = iso_now()
+    entries = (entries if isinstance(entries, list) else []) + [{"old": c["old"], "new": c["new"], "at": stamp} for c in renamed]
+    try:
+        write_json(path, entries[-RENAME_LOG_KEEP:])
+    except OSError as err:
+        log.warning("Verlauf der Entity-IDs nicht schreibbar: %r", err)
+
+
+def renamed_to(missing, known):
+    """Heutige Entity-ID zu alten IDs laut Verlauf (auch über mehrere Umbenennungen hinweg)."""
+    try:
+        entries = json.loads(rename_log_file().read_text())
+    except (OSError, ValueError):
+        return {}
+    step = {e["old"]: e["new"] for e in entries if isinstance(e, dict) and e.get("old") and e.get("new")}  # spätere gewinnen
+    out = {}
+    for old in missing:
+        cur, seen = old, set()
+        while cur not in known and cur in step and cur not in seen:
+            seen.add(cur)
+            cur = step[cur]
+        if cur != old and cur in known:
+            out[old] = cur
+    return out
+
+
+async def known_entities():
+    """Alle Entity-IDs in Home Assistant (Registry und Zustände – auch YAML-Entitäten ohne unique_id) und die Zustände."""
+    states, entities = await ha([{"type": "get_states"}, {"type": "config/entity_registry/list"}])
+    return {st["entity_id"] for st in states} | {e["entity_id"] for e in entities}, states
+
+
+async def broken_references():
+    """Automationen, Skripte, Szenen und Dashboards (über die Oberfläche gepflegt), die Entitäten nennen, die es in
+    Home Assistant nicht gibt. Aktionen wie light.turn_on zählen nicht. Mit Vorschlägen aus dem Verlauf der Entity-IDs
+    und den vorhandenen Entitäten der betroffenen Domänen zur Auswahl."""
+    known, states = await known_entities()
+    services = (await ha([{"type": "get_services"}]))[0]
+    domains = {k.partition(".")[0] for k in known}
+    actions = {f"{d}.{a}" for d, acts in services.items() for a in acts}
+    items, unreadable = await scan_configs()
+    found = []
+    for it in items:
+        missing = sorted({m.group(0) for m in ENTITY_REF_RE.finditer(item_text(it))
+                          if m.group(1) in domains and m.group(0) not in known and m.group(0) not in actions})
+        if missing:
+            found.append({**{k: it[k] for k in ("kind", "id", "title")}, "entities": missing})
+    missing = sorted({e for f in found for e in f["entities"]})
+    names = {st["entity_id"]: st["attributes"].get("friendly_name", "") for st in states}
+    wanted = {m.partition(".")[0] for m in missing}
+    choices = {d: [{"id": k, "name": names.get(k, "")} for k in sorted(known) if k.partition(".")[0] == d] for d in wanted}
+    return {"items": found, "missing": missing, "suggestions": renamed_to(missing, known), "choices": choices,
+            "scanned": len(items), "unreadable": unreadable}
+
+
+async def check_references(request):
+    return web.json_response(await broken_references())
+
+
+async def repair_references(request):
+    """Ersetzt Verweise auf fehlende Entitäten durch die gewählten (vorhandenen) Entity-IDs – nur Text-Ersatz der IDs,
+    alles andere an Karten und Automationen bleibt; vorher gesichert. Danach wird erneut geprüft."""
+    known, _ = await known_entities()
+    mapping = {old: new for old, new in ((await request.json()).get("mapping") or {}).items()
+               if isinstance(old, str) and ENTITY_REF_RE.fullmatch(old) and old not in known and new in known}
+    if not mapping:
+        raise web.HTTPBadRequest(text="Keine gültige Zuordnung – das Ziel muss eine vorhandene Entität sein")
+    changed, _, _, errors = await replace_references({"update_references": True}, mapping)
+    return web.json_response({"updated_references": changed, "errors": errors, **await broken_references()})
+
+
 async def resolve_areas(body, items):
     """Ziel-Bereich je Gerät (nur wenn „Raum als Bereich setzen“ aktiv und der Bereich sich ändert)."""
     out = {}
@@ -1084,8 +1213,8 @@ async def plan(request):
     items = parse_request(body)
     changes, skipped, usages, unreadable, notes, info, unhandled = [], [], [], 0, [], [], []
     if body.get("rename_entities") and items:
-        entities = (await ha([{"type": "config/entity_registry/list"}]))[0]
-        changes, skipped, info = entity_changes(items, entities)
+        entities, devices, areas = await entity_registries()
+        changes, skipped, info = entity_changes(items, entities, devices, areas)
         if changes:
             mapping = {c["old"]: c["new"] for c in changes}
             usages, unreadable, notes = await collect_usages(body, mapping)
@@ -1448,14 +1577,17 @@ async def apply(request):
         raise web.HTTPBadRequest(text="Keine Geräte angegeben")
     z2m_mode = bool(body.get("rename_entities"))  # Entity-IDs in Home Assistant anpassen
     z2m_on = use_z2m(body)                          # Gerät in Zigbee2MQTT umbenennen
+    ids_only = bool(body.get("entities_only"))      # „Entity-IDs angleichen“: Gerätenamen bleiben, nur die IDs folgen ihnen
+    if ids_only:
+        body.update(set_area=False, skip_names=True)  # weder Bereich noch Namen anfassen oder prüfen
     errors, done = [], []
     pid = body.get("progress_id")
     prog_start(pid, len(items) * 2 + 4)
     prog(pid, "Sichere den aktuellen Stand …", 0)
     await safe_backup("vor-umbenennen")
     prog(pid, "Lese Entitäten …", 0)
-    entities = (await ha([{"type": "config/entity_registry/list"}]))[0] if z2m_mode else []
-    changes, skipped, _info = entity_changes(items, entities) if z2m_mode else ([], [], [])
+    entities, devices, areas = await entity_registries() if z2m_mode else ([], [], [])
+    changes, skipped, _info = entity_changes(items, entities, devices, areas) if z2m_mode else ([], [], [])
     before = {ekey(e): e["entity_id"] for e in entities}
     key_of = {e["entity_id"]: ekey(e) for e in entities}
     batch = {it["device_id"] for it in items}
@@ -1470,11 +1602,15 @@ async def apply(request):
     failed_ids = set()
     owners = {}
     in_z2m = []  # in Zigbee2MQTT umbenannt: Name und Bereich in HA werden danach nachgezogen
-    if z2m_on and any(i.get("source") == "z2m" for i in items):
+    z2m_sent = set()  # Geräte, deren Umbenennung an Z2M ging – nur dort benennt Z2M die Entity-IDs selbst um
+    if z2m_on and not ids_only and any(i.get("source") == "z2m" for i in items):
         prog(pid, "Suche die Zigbee2MQTT-Instanz der Geräte …", 0)
         owners = await z2m_devices()
     for n, it in enumerate(items, 1):
         prog(pid, f"Benenne um ({n}/{len(items)}): {it['name']}", 0)
+        if ids_only:
+            done.append(it["device_id"])
+            continue
         if z2m_on and it.get("source") == "z2m" and it.get("ieee"):
             # In Zigbee2MQTT umbenennen und Z2Ms Antwort abwarten; die HA-Entity-IDs ändern wir selbst, damit wir sie kennen
             owner = owners.get(it["ieee"].lower())
@@ -1483,6 +1619,7 @@ async def apply(request):
                 result = {"status": "ok"}  # heißt in Z2M schon so (Z2M meldete sonst „already in use“): nur HA nachziehen
             else:
                 result = await z2m_request(base, "device/rename", {"from": it["ieee"], "to": it["name"], "homeassistant_rename": z2m_mode})
+                z2m_sent.add(it["device_id"])
             if result.get("status") == "timeout":  # keine Antwort: prüfen, ob Z2M den neuen Namen trotzdem schon führt
                 now = (await z2m_devices()).get(it["ieee"].lower())
                 if now and now["name"] == it["name"]:
@@ -1508,7 +1645,7 @@ async def apply(request):
         prog(pid, "Warte, bis Home Assistant die neuen Namen aus Zigbee2MQTT übernimmt …", 0)
         errors += await adopt_z2m_names(in_z2m, targets)
 
-    z2m_ok = {i["device_id"] for i in items if i["device_id"] in done and i.get("source") == "z2m" and z2m_on}
+    z2m_ok = z2m_sent & set(done)
     ids_by_entity = {e["entity_id"]: e.get("device_id") for e in entities}
     changes = [c for c in changes if ids_by_entity.get(c["old"]) not in failed_ids]  # nichts ändern, wenn Z2M nicht umbenannt hat
     # Z2M benennt mit homeassistant_rename die Entity-IDs selbst um (Löschen, Neuanlegen, Umbenennen in HA) – und nicht
@@ -1532,6 +1669,7 @@ async def apply(request):
     if z2m_mode and mine:
         after = await entity_ids_by_key()
         renamed = sorted(({"old": before[k], "new": after[k]} for k in mine if k in after and after[k] != before[k]), key=lambda c: c["old"])
+        log_renames(renamed)
 
     changed_refs, unreadable, notes = [], 0, []
     prog(pid, "Suche Verweise …", 0)
@@ -1614,6 +1752,8 @@ def make_app():
         web.post("/api/apply", apply),
         web.post("/api/verify", verify),
         web.post("/api/fix_references", fix_references),
+        web.get("/api/references", check_references),
+        web.post("/api/references/repair", repair_references),
         web.get("/api/progress", progress),
         web.get("/api/z2m_bases", z2m_bases),
         web.post("/api/assign_area", assign_area),

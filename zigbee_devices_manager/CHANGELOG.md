@@ -1,5 +1,16 @@
 # Änderungen
 
+## 0.12.0
+
+*25.10.2026*
+
+- **Entity-IDs sauber umbenennen, auch bei Matter:** Home Assistant setzt seit einiger Zeit den Bereich vor neue Entity-IDs (`light.wohnzimmer_s2_wzel03` für das Gerät „WZEL03“ im Bereich „Wohnzimmer (S2)“). Das Add-on hat diesen Anfang bisher nicht als alten Namen erkannt – vor allem bei Geräten mit nur einer Entität blieb die ID dann beim Umbenennen stehen. Jetzt wird der Bereich davor erkannt (auch ein früherer), ebenso die ID der Haupt-Entität des Geräts. Ergebnis: `light.s2_wzel_lsp03`.
+- **Neu: „⚠ Entity-IDs angleichen“** für schon benannte Geräte, deren Entity-IDs noch den Namen vom Anlernen tragen. Der Knopf steht in der Zeile unter „✓ aktuell“, dazu der Filter „Alte Entity-IDs (n)“ und ein Sammelknopf für alle ausgewählten (oder alle sichtbaren) Geräte. Gerätename und Bereich bleiben; mit Vorschau, Anpassen der Verweise in Automationen/Dashboards (z. B. Karten mit den alten IDs), Sicherung und Prüfung. Danach findet Home Assistant die Entitäten auch beim Tippen von z. B. `lsp02` im YAML-Editor.
+- **Neu: „🔍 Verweise prüfen“** (Geräteliste): sucht in Automationen, Skripten, Szenen und Dashboards nach Entitäten, die es nicht mehr gibt – z. B. nach einer Umbenennung, bei der die Verweise nicht mit angepasst wurden. Je alte ID wählst du die heute gemeinte Entität (vorgeschlagen, wenn das Add-on die Umbenennung kennt); ersetzt wird nur die ID, der Rest der Karte bleibt, vorher wird gesichert.
+- **„Verweise in Automationen/Dashboards anpassen“ ist jetzt standardmäßig an** – einmalig auch bei schon gespeicherten Einstellungen. War der Haken aus, zeigten Karten nach dem Umbenennen ins Leere; eine Hue-Like-Light-Card zeigt dann schon bei einer fehlenden Entität nur noch einen Fehler statt der ganzen Karte. Gelöscht hat das Add-on Karten dabei nie.
+- Jede Änderung einer Entity-ID merkt sich das Add-on in `/config/zigbee_devices_manager/entity-id-verlauf.json` – daraus kommen die Vorschläge von „Verweise prüfen“.
+- Heißt ein Gerät in Zigbee2MQTT schon wie gewünscht, wartet das Umbenennen nicht mehr vergeblich darauf, dass Z2M die Entity-IDs ändert.
+
 ## 0.11.0
 
 *24.10.2026*
