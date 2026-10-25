@@ -13,7 +13,7 @@ und nach einem festen Namensschema vergibst.
 - Liste aller neuen und bestehenden Zigbee-Geräte, Inline-Umbenennen, Suche, Filter „Neu“; zusätzlich Filter nach Haus, Etage, Raum und Typ (mit Anzahl, „ohne Raum/Typ“ findet Lücken) – Sammelaktionen wirken nur auf die sichtbaren Geräte
 - **Matter-Geräte (Thread/WLAN):** Alle Geräte der Matter-Integration stehen mit in der Liste – unter dem Gateway „Matter“, mit Node-ID statt IEEE (hinter einer Matter-Bridge zusätzlich der Endpunkt). Sie bekommen dasselbe Namensschema, Haus/Etage/Raum/Typ und laufende Nummern wie die Zigbee-Geräte; umbenannt wird in Home Assistant (`name_by_user`), samt Entity-IDs, Verweisen und Bereich. Neu ist ein Matter-Gerät, solange es in HA keinen eigenen Namen hat. Gekoppelt werden Matter-Geräte weiterhin in der Home-Assistant-App.
 - **Namensschema** frei konfigurierbar, z. B. `{room}_{type}_{nr}` → `WZ_LP_01`
-  - Kürzel für Räume und Gerätetypen zum Auswählen
+  - Kürzel für Räume und Gerätetypen zum Auswählen (alphabetisch nach Namen sortiert)
   - Automatisches Hochzählen je Raum+Typ, überspringt belegte Namen
   - Zähler arabisch (`01`), römisch (`III`) oder Buchstaben (`C`)
   - GROSS / klein / wie eingegeben

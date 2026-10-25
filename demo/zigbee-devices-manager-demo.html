@@ -698,6 +698,10 @@ function syncAreas() {
   return added;
 }
 const typeOf = d => S.scheme.types.find(t => t.id === S.meta[d.id]?.type);
+/** Räume und Gerätetypen alphabetisch nach Namen („Bad 2“ vor „Bad 10“), bei gleichem Namen nach Kürzel – nur für die Anzeige,
+ *  gespeichert bleibt die Reihenfolge. */
+const byName = items => [...items].sort((a, b) => (a.name || "").localeCompare(b.name || "", "de", {numeric: true, sensitivity: "base"})
+  || (a.abbr || "").localeCompare(b.abbr || "", "de", {numeric: true}));
 const gwOf = d => S.gateways[d.bridge] || {};
 /** Kennung des Geräts: IEEE bei Zigbee, Node-ID (hinter einer Matter-Bridge mit Endpunkt) bei Matter. */
 const addrOf = d => d.source !== "matter" ? d.ieee || "" : d.node == null ? "" : "Node " + d.node + (d.endpoint == null ? "" : " · Endpunkt " + d.endpoint);
@@ -718,8 +722,8 @@ const floorOf = d => {
 const FACETS = [
   {key: "house", label: "Haus", none: "ohne Haus", of: d => houseOf(d)?.id, list: () => S.scheme.houses, on: () => useHouse() && S.scheme.houses.length > 1},
   {key: "floor", label: "Etage", none: "ohne Etage", of: d => floorOf(d)?.id, list: () => S.scheme.floors, on: () => true},
-  {key: "room", label: "Raum", none: "ohne Raum", of: d => roomOf(d)?.id, list: () => S.scheme.rooms, on: () => true},
-  {key: "type", label: "Typ", none: "ohne Typ", of: d => typeOf(d)?.id, list: () => S.scheme.types, on: () => true}
+  {key: "room", label: "Raum", none: "ohne Raum", of: d => roomOf(d)?.id, list: () => byName(S.scheme.rooms), on: () => true},
+  {key: "type", label: "Typ", none: "ohne Typ", of: d => typeOf(d)?.id, list: () => byName(S.scheme.types), on: () => true}
 ];
 /** Passt das Gerät zu allen gesetzten Filtern (außer skip – für die Zahlen in dessen Auswahl)? */
 const facetOk = (d, skip) => FACETS.every(f => f.key === skip || !f.on() || !S.facets[f.key] || (f.of(d) || "-") === S.facets[f.key]);
@@ -907,10 +911,10 @@ function renderDevices() {
       + (n.has("-") || cur === "-" ? `<option value="-"${cur === "-" ? " selected" : ""}>${f.none} (${n.get("-") || 0})</option>` : "") + `</select>`;
   };
   const facetOn = FACETS.some(f => f.on() && S.facets[f.key]), hiddenSel = [...S.sel].filter(id => !rows.some(d => d.id === id)).length;
-  const roomOpts = sel => `<option value="">–</option>` + S.scheme.rooms.map(r => `<option value="${r.id}"${r.id === sel ? " selected" : ""}>${esc(r.abbr)} · ${esc(r.name)}</option>`).join("");
+  const roomOpts = sel => `<option value="">–</option>` + byName(S.scheme.rooms).map(r => `<option value="${r.id}"${r.id === sel ? " selected" : ""}>${esc(r.abbr)} · ${esc(r.name)}</option>`).join("");
   const houseOpts = sel => `<option value="">–</option>` + S.scheme.houses.map(h => `<option value="${h.id}"${h.id === sel ? " selected" : ""}>${esc(h.abbr)} · ${esc(h.name)}</option>`).join("");
   const floorOpts = sel => `<option value="">–</option>` + S.scheme.floors.map(f => `<option value="${f.id}"${f.id === sel ? " selected" : ""}>${esc(f.abbr)} · ${esc(f.name)}</option>`).join("");
-  const typeOpts = sel => `<option value="">–</option>` + S.scheme.types.map(t => `<option value="${t.id}"${t.id === sel ? " selected" : ""}>${esc(t.abbr)} · ${esc(t.name)}</option>`).join("");
+  const typeOpts = sel => `<option value="">–</option>` + byName(S.scheme.types).map(t => `<option value="${t.id}"${t.id === sel ? " selected" : ""}>${esc(t.abbr)} · ${esc(t.name)}</option>`).join("");
   const counts = {all: allRows().length, new: allRows().filter(d => d.is_new).length};
   const applicable = rows.filter(d => sug.has(d.id) && sug.get(d.id) !== d.name && (!S.sel.size || S.sel.has(d.id)));
   // Entity-IDs angleichen: nur ohne ausstehende Umbenennung – die zieht die IDs ohnehin mit
@@ -1749,8 +1753,8 @@ function renderScheme() {
     </div>
     <div class="panel list"><h2>Häuser / Präfix</h2>${list("houses", sc.houses)}<button class="btn" data-add="houses">＋ Haus</button></div>
     <div class="panel list"><h2>Etagen</h2><p class="sub">Nummer oder Kürzel der Etage (0 = Erdgeschoss, 1, 2, 3 …). Zusammen mit dem Haus ergibt das z. B. H1 oder S2. Etagen aus Home Assistant werden übernommen und per Raum/Bereich automatisch zugeordnet.</p>${list("floors", sc.floors)}<button class="btn" data-add="floors">＋ Etage</button></div>
-    <div class="panel list"><h2>Räume</h2>${list("rooms", sc.rooms)}<button class="btn" data-add="rooms">＋ Raum</button> <button class="btn" id="syncAreas" title="Bereiche aus Home Assistant als Räume übernehmen">⟳ Bereiche aus HA</button>${S.areas.length ? "" : ` <span class="sub">(keine Bereiche gefunden)</span>`}</div>
-    <div class="panel list"><h2>Gerätetypen</h2>${list("types", sc.types)}<button class="btn" data-add="types">＋ Typ</button></div>
+    <div class="panel list"><h2>Räume</h2>${list("rooms", byName(sc.rooms))}<button class="btn" data-add="rooms">＋ Raum</button> <button class="btn" id="syncAreas" title="Bereiche aus Home Assistant als Räume übernehmen">⟳ Bereiche aus HA</button>${S.areas.length ? "" : ` <span class="sub">(keine Bereiche gefunden)</span>`}</div>
+    <div class="panel list"><h2>Gerätetypen</h2>${list("types", byName(sc.types))}<button class="btn" data-add="types">＋ Typ</button></div>
   </div>`;
   const root = $("#tab-scheme");
   $("#case", root).value = sc.case; $("#cst", root).value = c.style;
@@ -1781,7 +1785,12 @@ function renderScheme() {
       sc[kind] = sc[kind].filter(i => i !== item); upd();
     };
   });
-  root.querySelectorAll("[data-add]").forEach(b => b.onclick = () => { sc[b.dataset.add].push({id: uid("x"), name: "Neu", abbr: "NE"}); upd(); });
+  root.querySelectorAll("[data-add]").forEach(b => b.onclick = () => {
+    const item = {id: uid("x"), name: "Neu", abbr: "NE"}; sc[b.dataset.add].push(item); upd();
+    // Räume und Typen stehen alphabetisch – der neue Eintrag steht also unter „N“: dorthin springen, Namen zum Überschreiben markieren
+    const inp = $(`#tab-scheme .row[data-id="${item.id}"] input[data-k="name"]`);
+    if (inp) { inp.scrollIntoView({block: "center"}); inp.focus(); inp.select(); }
+  });
 }
 
 // ---------- Export-Tab ----------
