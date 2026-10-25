@@ -97,6 +97,17 @@ class Zigbee2MqttPartlyRenamed(unittest.TestCase):
         """Ohne Z2M-unique_id: gemeinsamer Anfang nur der noch alten IDs (h1_wz_tas02), nicht „h1“ über alle."""
         self.check(self.entities(with_uid=False))
 
+    def test_leftover_id_of_previous_name(self):
+        """H1-SZFL-SW02 trägt noch sensor.h1_szfl_sw01_linkquality (früherer Name SW01): nicht h1_szfl_sw02_sw01_linkquality."""
+        entities = [self.z2m("sensor.h1_szfl_sw02_battery", "battery", "Battery"), self.z2m("event.h1_szfl_sw02_action", "action", "Action"),
+                    self.z2m("sensor.h1_szfl_sw01_linkquality", "linkquality", "Linkquality")]
+        items = [{"device_id": "t", "name": "H1-SZFL-SW02", "old_name": "H1-SZFL-SW02", "orig_name": "H1-SZFL-SW02"}]
+        changes, _, _ = server.entity_changes(items, entities, [dev("t", None)], AREAS)
+        self.assertEqual(mapping(changes), {"sensor.h1_szfl_sw01_linkquality": "sensor.h1_szfl_sw02_linkquality"})
+        # ohne Z2M-unique_id lässt sich die Endung nicht sicher bestimmen: dann lieber nichts ändern als raten
+        plain = [ent(e["entity_id"], "t", e["original_name"]) for e in entities]
+        self.assertEqual(server.entity_changes(items, plain, [dev("t", None)], AREAS)[0], [])
+
     def test_z2m_light_keeps_no_type_suffix(self):
         """Z2M lässt den Typ weg: light.flur_light ist das Licht selbst (unique_id …_light_…), light.flur_light_l1 Endpunkt l1."""
         entities = [self.z2m("light.flur_light", "light"), self.z2m("light.flur_light_l1", "light_l1", "L1"),
