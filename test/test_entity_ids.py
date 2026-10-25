@@ -295,3 +295,155 @@ class DuplicateEntities(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(res["errors"]), 2)
         self.assertEqual([c for c in self.calls if c["type"] != "config/entity_registry/list" and c["type"] != "get_states"], [])
         self.assertEqual(self.replaced, [])
+
+
+class ApplyEntitiesOnly(unittest.IsolatedAsyncioTestCase):
+    """„Entity-IDs angleichen“ gegen eine nachgestellte Entitäten-Registry."""
+    UID = "0x0017880109c30aab_device_mode_zigbee2mqtt"
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = {k: getattr(server, k) for k in ("ha", "safe_backup", "collect_usages", "backup_root")}
+        server.backup_root = lambda: Path(self.tmp.name)
+        # Z2M legt für eine einstellbare Eigenschaft Auswahl UND (meist deaktivierten) Sensor mit derselben unique_id an
+        # der alte Sensor ist älter und steht in der Registry vor der Auswahl
+        self.registry = [
+            {"entity_id": "sensor.h1_szfl_sw02_device_mode", "device_id": "sw01", "platform": "mqtt", "unique_id": self.UID, "original_name": "Device mode",
+             "disabled_by": "integration"},
+            {"entity_id": "select.h1_szfl_sw01_device_mode", "device_id": "sw01", "platform": "mqtt", "unique_id": self.UID, "original_name": "Device mode"},
+            {"entity_id": "sensor.h1_szfl_sw01_battery", "device_id": "sw01", "platform": "mqtt", "unique_id": "0x0017880109c30aab_battery_zigbee2mqtt",
+             "original_name": "Battery"},
+        ]
+
+        async def ha(cmds):
+            out = []
+            for c in cmds:
+                if c["type"] == "config/entity_registry/list":
+                    out.append([dict(e) for e in self.registry])
+                elif c["type"] in ("config/device_registry/list", "config/area_registry/list"):
+                    out.append([])
+                elif c["type"] == "config/entity_registry/update":
+                    next(e for e in self.registry if e["entity_id"] == c["entity_id"])["entity_id"] = c["new_entity_id"]
+                    out.append({})
+            return out
+
+        async def noop(*a, **k):
+            return None
+
+        async def no_usages(*a, **k):
+            return [], 0, []
+
+        server.ha, server.safe_backup, server.collect_usages = ha, noop, no_usages
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(server, k, v)
+        self.tmp.cleanup()
+
+    async def test_sensor_and_select_with_same_unique_id(self):
+        import json
+        body = {"items": [{"device_id": "sw01", "name": "H1-SZFL-SW01", "old_name": "H1-SZFL-SW01", "orig_name": "H1-SZFL-SW01", "source": "z2m",
+                           "ieee": "0x0017880109c30aab"}], "entities_only": True, "rename_entities": True, "rename_z2m": False}
+
+        class Req:
+            async def json(self):
+                return json.loads(json.dumps(body))
+        res = json.loads((await server.apply(Req())).text)
+        self.assertEqual([e["entity_id"] for e in self.registry],
+                         ["sensor.h1_szfl_sw01_device_mode", "select.h1_szfl_sw01_device_mode", "sensor.h1_szfl_sw01_battery"])
+        self.assertEqual(res["renamed_entities"], [{"old": "sensor.h1_szfl_sw02_device_mode", "new": "sensor.h1_szfl_sw01_device_mode"}])
+        self.assertEqual([c["status"] for c in res["checks"] if c["name"] == "Entity-IDs"], ["ok"])
+
+    async def test_unrenamed_id_is_reported_not_ok(self):
+        """Bleibt eine geplante Umbenennung aus, heißt die Prüfung nicht „alles wurde angepasst“."""
+        import json
+        orig = server.ha
+
+        async def ha_without_update(cmds):
+            return [{} if c["type"] == "config/entity_registry/update" else (await orig([c]))[0] for c in cmds]
+        server.ha = ha_without_update
+        body = {"items": [{"device_id": "sw01", "name": "H1-SZFL-SW01", "old_name": "H1-SZFL-SW01", "orig_name": "H1-SZFL-SW01", "source": "z2m",
+                           "ieee": "0x0017880109c30aab"}], "entities_only": True, "rename_entities": True, "rename_z2m": False}
+
+        class Req:
+            async def json(self):
+                return json.loads(json.dumps(body))
+        res = json.loads((await server.apply(Req())).text)
+        self.assertEqual(res["checks"][0]["status"], "fail")
+        self.assertIn("sensor.h1_szfl_sw02_device_mode → sensor.h1_szfl_sw01_device_mode", res["checks"][0]["detail"])
+
+
+class RemoveFromScenes(unittest.IsolatedAsyncioTestCase):
+    """Fehlende Entitäten (z. B. switch.…_do_not_disturb nach dem Wechsel Zigbee → Matter) aus Szenen entfernen."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = {k: getattr(server, k) for k in ("ha", "scan_configs", "ClientSession", "DATA")}
+        server.DATA = Path(self.tmp.name)
+        self.posted = []
+        posted = self.posted
+
+        async def ha(cmds):
+            out = []
+            for c in cmds:
+                if c["type"] == "get_states":
+                    out.append([{"entity_id": "light.s2_wzel_lsp01", "attributes": {}}])
+                elif c["type"] == "config/entity_registry/list":
+                    out.append([{"entity_id": "light.s2_wzel_lsp01"}])
+                elif c["type"] == "get_services":
+                    out.append({})
+            return out
+
+        async def scan_configs():
+            scene = {"id": "s1", "name": "S2-WZ-TV", "entities": {"light.s2_wzel_lsp01": {"state": "on"}, "switch.s2_wzel_lsp01_do_not_disturb": {"state": "off"}},
+                     "metadata": {"switch.s2_wzel_lsp01_do_not_disturb": {"entity_only": True}}}
+            dash = {"views": [{"cards": [{"type": "entities", "entities": ["switch.s2_wzel_lsp01_do_not_disturb"]}]}]}
+            return [{"kind": "scene", "id": "s1", "path": "config/scene/config/s1", "title": "S2-WZ-TV", "config": scene},
+                    {"kind": "dashboard", "id": "", "title": "Übersicht", "url_path": None, "config": dash}], 0
+
+        class Resp:
+            status = 200
+            async def text(self): return "{}"
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+
+        class Session:
+            def __init__(self, *a, **k): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            def post(self, url, json=None):
+                posted.append((url, json))
+                return Resp()
+
+        server.ha, server.scan_configs, server.ClientSession = ha, scan_configs, Session
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(server, k, v)
+        self.tmp.cleanup()
+
+    async def remove(self, ids):
+        import json
+
+        class Req:
+            async def json(self):
+                return {"entity_ids": ids}
+        return json.loads((await server.remove_from_scenes(Req())).text)
+
+    async def test_only_missing_entity_leaves_scene(self):
+        res = await self.remove(["switch.s2_wzel_lsp01_do_not_disturb", "light.s2_wzel_lsp01"])  # die vorhandene Lampe bleibt
+        self.assertEqual(len(self.posted), 1)  # nur die Szene, das Dashboard nicht
+        url, cfg = self.posted[0]
+        self.assertTrue(url.endswith("/config/scene/config/s1"))
+        self.assertEqual(cfg["entities"], {"light.s2_wzel_lsp01": {"state": "on"}})
+        self.assertEqual(cfg["metadata"], {})
+        self.assertEqual(cfg["name"], "S2-WZ-TV")
+        self.assertEqual(res["updated_references"], [{"kind": "scene", "title": "S2-WZ-TV", "entities": ["switch.s2_wzel_lsp01_do_not_disturb"]}])
+        self.assertTrue(any(Path(self.tmp.name, "backups").rglob("scene__s1.bak")))
+
+    async def test_existing_entity_is_refused(self):
+        with self.assertRaises(server.web.HTTPBadRequest):
+            await self.remove(["light.s2_wzel_lsp01"])
+        self.assertEqual(self.posted, [])

@@ -118,7 +118,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 </main>
 <div class="toast" id="toast"></div>
 
-<script src="zigbee-tree.js?v=0.14.0"></script>
+<script src="zigbee-tree.js?v=0.15.0"></script>
 <script>
 // ---------- Konfiguration / Standarddaten ----------
 const DEMO_FORCED = window.ZDM_DEMO === true;
@@ -327,13 +327,22 @@ const api = {
   async checkRefs() {
     if (this.demo) {
       const fixed = (() => { try { return JSON.parse(localStorage.getItem("zdm-demo-refs") || "[]"); } catch (e) { return []; } })();
-      const missing = ["light.wohnzimmer_stehlampe", "light.wohnzimmer_nanoleaf_essentials_a19"].filter(m => !fixed.includes(m));
-      return {items: missing.length ? [{kind: "dashboard", id: "licht", title: "Licht", entities: missing}] : [], missing, scanned: 7, unreadable: 0,
+      const missing = ["light.wohnzimmer_stehlampe", "light.wohnzimmer_nanoleaf_essentials_a19", "switch.wz_lp_05_do_not_disturb"].filter(m => !fixed.includes(m));
+      const lights = missing.filter(m => m.startsWith("light.")), dnd = missing.filter(m => m.startsWith("switch."));
+      return {items: [...(lights.length ? [{kind: "dashboard", id: "licht", title: "Licht", entities: lights}] : []), ...(dnd.length ? [{kind: "scene", id: "abends", title: "Abends", entities: dnd}] : [])],
+        missing, scanned: 7, unreadable: 0,
         suggestions: {"light.wohnzimmer_nanoleaf_essentials_a19": "light.wz_lp_02"},
         choices: {light: [["light.wz_lp_02", "WZ_LP_02"], ["light.wz_lp_05", "WZ_LP_05"], ["light.ku_lp_01", "KU_LP_01"], ["light.s2_wzel_lsp01", "S2-WZEL-LSP01"],
           ["light.s2_wzel_lsp02", "S2-WZEL-LSP02"], ["light.s2_wzel_lsp03", "S2-WZEL-LSP03"], ["light.h1_szfl_lp01", "H1-SZFL-LP01"], ["light.buero_stehlampe", "Büro Stehlampe"]].map(([id, name]) => ({id, name}))}};
     }
     const r = await fetch("api/references"); if (!r.ok) throw new Error(await r.text()); return r.json();
+  },
+  async removeFromScenes(ids) {
+    if (this.demo) {
+      try { const f = JSON.parse(localStorage.getItem("zdm-demo-refs") || "[]"); localStorage.setItem("zdm-demo-refs", JSON.stringify([...f, ...ids])); } catch (e) {}
+      return {...await this.checkRefs(), updated_references: [{kind: "scene", title: "Abends", entities: ids}], errors: []};
+    }
+    return this.post("api/references/remove_from_scenes", {entity_ids: ids});
   },
   async repairRefs(mapping) {
     if (this.demo) {
@@ -1105,16 +1114,19 @@ async function checkReferences() {
     const where = id => r.items.filter(i => i.entities.includes(id)).map(i => `${kinds[i.kind] || i.kind} „${esc(i.title)}“`).join(", ");
     const choices = id => r.choices[id.split(".")[0]] || [], label = c => c ? (c.name ? c.name + " · " + c.id : c.id) : "";
     const chosen = Object.fromEntries(r.missing.filter(id => r.suggestions[id]).map(id => [id, r.suggestions[id]]));
+    const scenesOf = id => r.items.filter(i => i.kind === "scene" && i.entities.includes(id));
     dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${r.missing.length ? `⚠ ${r.missing.length} fehlende Entität(en) in ${r.items.length} Automation(en)/Dashboard(s)` : "✅ Keine Verweise auf fehlende Entitäten"}</h2>
       ${note}
       <p class="sub">${r.scanned} Automationen, Skripte, Szenen und Dashboards durchsucht (über die Oberfläche gepflegte)${r.unreadable ? `; ${r.unreadable} sind YAML und wurden nicht geprüft` : ""}.</p>
-      ${r.missing.length ? `<p class="sub">Eine Karte wie die Hue-Like-Light-Card zeigt schon bei <b>einer</b> fehlenden Entität nur noch einen Fehler. Wähle je alte ID die Entität, die jetzt gemeint ist. Ersetzt wird nur die ID – Karten und Automationen bleiben sonst unverändert und werden vorher gesichert.</p>
+      ${r.missing.length ? `<p class="sub">Eine Karte wie die Hue-Like-Light-Card zeigt schon bei <b>einer</b> fehlenden Entität nur noch einen Fehler. Wähle je alte ID die Entität, die jetzt gemeint ist. Ersetzt wird nur die ID – Karten, Szenen und Automationen bleiben sonst unverändert und werden vorher gesichert.</p>
       <div style="max-height:50vh;overflow:auto">${r.missing.map(id => `<div style="padding:8px 0;border-bottom:1px solid var(--line)">
         <code>${esc(id)}</code> <span class="sub">in ${where(id)}</span>
         <div class="row" style="margin:6px 0 0;align-items:flex-start"><span style="padding-top:7px">→</span><div class="pick" data-old="${esc(id)}">
           <input type="search" autocomplete="off" spellcheck="false" placeholder="Entität suchen, z. B. lsp02 oder wohnzimmer lampe" value="${esc(label(choices(id).find(c => c.id === chosen[id])))}">
-          <div class="pickres" hidden></div></div>${r.suggestions[id] ? `<span class="sub" style="padding-top:7px">aus dem Verlauf</span>` : ""}</div></div>`).join("")}</div>` : ""}
-      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="again">Erneut prüfen</button>${r.missing.length ? `<button class="btn primary" id="go">Ersetzen</button>` : ""}<button class="btn" id="close">Schließen</button></div>`;
+          <div class="pickres" hidden></div></div>${r.suggestions[id] ? `<span class="sub" style="padding-top:7px">aus dem Verlauf</span>` : ""}</div>
+        ${scenesOf(id).length ? `<label class="sub" style="display:block;margin:6px 0 0 18px"><input type="checkbox" class="dropScene" data-old="${esc(id)}"> gibt es nicht mehr – aus ${scenesOf(id).length === 1 ? "der Szene" : scenesOf(id).length + " Szenen"} entfernen</label>` : ""}</div>`).join("")}</div>` : ""}
+      ${r.missing.some(id => scenesOf(id).length) ? `<p class="sub" style="margin:10px 0 0">Findest du keinen Ersatz, gibt es die Entität meist nicht mehr (z. B. „do not disturb“ einer Lampe, die jetzt über Matter läuft). Aus Szenen lässt sie sich dann entfernen – nur dieser Eintrag, der Rest der Szene bleibt. <button class="btn" id="dropAll">Alle ohne Ersatz in Szenen markieren</button></p>` : ""}
+      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="again">Erneut prüfen</button>${r.missing.length ? `<button class="btn primary" id="go">Ausführen</button>` : ""}<button class="btn" id="close">Schließen</button></div>`;
     $("#close", dlg).onclick = close;
     $("#again", dlg).onclick = () => load();
     // Suchfeld je alter ID: alle Wörter müssen in Name oder Entity-ID vorkommen (Groß/klein, -, _, Umlaute egal)
@@ -1126,7 +1138,7 @@ async function checkReferences() {
         const cur = list.find(c => c.id === chosen[old]), q = inp.value === label(cur) ? "" : inp.value, words = norm(q).split(" ").filter(Boolean);
         const hits = pickable.filter(x => words.every(w => x.hay.includes(w)));
         res.innerHTML = hits.slice(0, 40).map(x => `<button type="button" data-id="${esc(x.c.id)}" class="${x.c.id === chosen[old] ? "on" : ""}">${esc(x.c.name || x.c.id)}<span class="sub" style="padding:0">${esc(x.c.id)}</span></button>`).join("")
-          + (hits.length > 40 ? `<span class="sub">… und ${hits.length - 40} weitere – genauer suchen</span>` : hits.length ? "" : `<span class="sub">Keine Entität gefunden</span>`);
+          + (hits.length > 40 ? `<span class="sub">… und ${hits.length - 40} weitere – genauer suchen</span>` : hits.length ? "" : `<span class="sub">Keine Entität gefunden${scenesOf(old).length ? " – gibt es sie nicht mehr, unten „aus der Szene entfernen“ anhaken" : ""}</span>`);
         res.hidden = false;
       };
       inp.onfocus = () => { inp.select(); show(); };
@@ -1134,17 +1146,30 @@ async function checkReferences() {
       inp.onkeydown = e => { if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); res.hidden = true; } if (e.key === "Enter") { e.preventDefault(); $("button", res)?.click(); } };
       inp.onblur = () => setTimeout(() => { res.hidden = true; inp.value = label(list.find(c => c.id === chosen[old])); }, 150);
       res.onpointerdown = e => e.preventDefault(); // Fokus bleibt im Suchfeld, bis gewählt ist
-      res.onclick = e => { const b = e.target.closest("button[data-id]"); if (!b) return; chosen[old] = b.dataset.id; inp.value = label(list.find(c => c.id === b.dataset.id)); res.hidden = true; inp.blur(); };
+      res.onclick = e => { const b = e.target.closest("button[data-id]"); if (!b) return; chosen[old] = b.dataset.id; inp.value = label(list.find(c => c.id === b.dataset.id)); res.hidden = true; inp.blur();
+        const drop = dlg.querySelector(`.dropScene[data-old="${CSS.escape(old)}"]`); if (drop) drop.checked = false; };
     });
+    dlg.querySelectorAll(".dropScene").forEach(x => x.onchange = () => { if (x.checked) { delete chosen[x.dataset.old]; const inp = dlg.querySelector(`.pick[data-old="${CSS.escape(x.dataset.old)}"] input`); if (inp) inp.value = ""; } });
+    $("#dropAll", dlg) && ($("#dropAll", dlg).onclick = () => dlg.querySelectorAll(".dropScene").forEach(x => { if (!chosen[x.dataset.old]) x.checked = true; }));
     $("#go", dlg) && ($("#go", dlg).onclick = async () => {
       const mapping = Object.fromEntries(Object.entries(chosen).filter(([, v]) => v));
-      if (!Object.keys(mapping).length) { toast("Keine Entität gewählt"); return; }
-      $("#go", dlg).disabled = true; $("#go", dlg).textContent = "Ersetze …";
+      const drop = [...dlg.querySelectorAll(".dropScene:checked")].map(x => x.dataset.old).filter(id => !mapping[id]);
+      if (!Object.keys(mapping).length && !drop.length) { toast("Keine Entität gewählt und nichts zum Entfernen angehakt"); return; }
+      $("#go", dlg).disabled = true; $("#go", dlg).textContent = "Läuft …";
       try {
-        const res = await api.repairRefs(mapping);
-        draw(res, `<p>✅ ${res.updated_references.length} Automation(en)/Dashboard(s) angepasst${res.updated_references.length ? ": " + res.updated_references.map(u => esc(u.title)).join(", ") : ""}.</p>`
-          + (res.errors || []).map(e => `<p>❌ <b>${esc(e.device)}</b> <span class="sub">${esc(e.error)}</span></p>`).join(""));
-      } catch (e) { toast("Ersetzen fehlgeschlagen: " + e.message); draw(r, note); }
+        let res = null, msg = "";
+        if (Object.keys(mapping).length) {
+          res = await api.repairRefs(mapping);
+          msg += `<p>✅ ${res.updated_references.length} Automation(en)/Dashboard(s) angepasst${res.updated_references.length ? ": " + res.updated_references.map(u => esc(u.title)).join(", ") : ""}.</p>`
+            + (res.errors || []).map(e => `<p>❌ <b>${esc(e.device)}</b> <span class="sub">${esc(e.error)}</span></p>`).join("");
+        }
+        if (drop.length) {
+          res = await api.removeFromScenes(drop);
+          msg += `<p>✅ Aus ${res.updated_references.length} Szene(n) entfernt${res.updated_references.length ? ": " + res.updated_references.map(u => esc(u.title)).join(", ") : ""}.</p>`
+            + (res.errors || []).map(e => `<p>❌ <b>${esc(e.device)}</b> <span class="sub">${esc(e.error)}</span></p>`).join("");
+        }
+        draw(res, msg);
+      } catch (e) { toast("Fehlgeschlagen: " + e.message); draw(r, note); }
     });
   };
   const load = async () => { draw(null); try { draw(await api.checkRefs()); } catch (e) { close(); toast("Prüfen fehlgeschlagen: " + e.message); } };
