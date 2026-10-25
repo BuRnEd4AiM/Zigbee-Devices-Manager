@@ -92,3 +92,66 @@ class StaleIds(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrokenReferences(unittest.IsolatedAsyncioTestCase):
+    """„Verweise prüfen“: Karten/Automationen, die Entitäten nennen, die es nicht (mehr) gibt."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = {k: getattr(server, k) for k in ("ha", "scan_configs", "replace_references", "backup_root")}
+        server.backup_root = lambda: Path(self.tmp.name)
+        self.replaced = []
+
+        async def ha(cmds):
+            out = []
+            for c in cmds:
+                if c["type"] == "get_states":
+                    out.append([{"entity_id": "light.s2_wzel_lsp02", "attributes": {"friendly_name": "S2-WZEL-LSP02"}},
+                                {"entity_id": "person.flo", "attributes": {}}])
+                elif c["type"] == "config/entity_registry/list":
+                    out.append([{"entity_id": "light.s2_wzel_lsp02"}, {"entity_id": "light.s2_wzel_lsp03"}])
+                elif c["type"] == "get_services":
+                    out.append({"light": {"turn_on": {}, "toggle": {}}})
+            return out
+
+        async def scan_configs():
+            card = {"type": "custom:hue-like-light-card", "entities": ["light.s2_wzel_lsp02", "light.wohnzimmer_s2_wzel03"],
+                    "tap_action": {"action": "perform-action", "perform_action": "light.toggle"},
+                    "image": "/local/person.png", "url": "https://www.example.de", "icon": "mdi:lightbulb"}
+            return [{"kind": "dashboard", "id": "licht", "title": "Licht", "config": {"views": [{"cards": [card]}]}},
+                    {"kind": "automation", "id": "a1", "title": "Abends", "config": {"actions": [{"action": "light.turn_on", "target": {"entity_id": "light.s2_wzel_lsp02"}}]}}], 0
+
+        async def replace_references(body, mapping):
+            self.replaced.append(mapping)
+            return [{"kind": "dashboard", "title": "Licht"}], 0, [], []
+
+        server.ha, server.scan_configs, server.replace_references = ha, scan_configs, replace_references
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(server, k, v)
+        self.tmp.cleanup()
+
+    async def test_finds_only_missing_entities(self):
+        res = await server.broken_references()
+        self.assertEqual(res["missing"], ["light.wohnzimmer_s2_wzel03"])  # nicht light.toggle, Pfade, Hostnamen, mdi:
+        self.assertEqual([(i["title"], i["entities"]) for i in res["items"]], [("Licht", ["light.wohnzimmer_s2_wzel03"])])
+        self.assertEqual([c["id"] for c in res["choices"]["light"]], ["light.s2_wzel_lsp02", "light.s2_wzel_lsp03"])
+        self.assertEqual(res["suggestions"], {})
+
+    async def test_suggestion_from_rename_log_follows_chain(self):
+        server.log_renames([{"old": "light.wohnzimmer_s2_wzel03", "new": "light.wz_lp_03"}])
+        server.log_renames([{"old": "light.wz_lp_03", "new": "light.s2_wzel_lsp03"}])
+        res = await server.broken_references()
+        self.assertEqual(res["suggestions"], {"light.wohnzimmer_s2_wzel03": "light.s2_wzel_lsp03"})
+
+    async def test_repair_only_maps_missing_to_existing(self):
+        class Req:
+            async def json(self):
+                return {"mapping": {"light.wohnzimmer_s2_wzel03": "light.s2_wzel_lsp03",  # gültig
+                                    "light.s2_wzel_lsp02": "light.s2_wzel_lsp03",          # Quelle existiert: nicht anfassen
+                                    "light.weg": "light.gibts_nicht"}}                     # Ziel fehlt
+        await server.repair_references(Req())
+        self.assertEqual(self.replaced, [{"light.wohnzimmer_s2_wzel03": "light.s2_wzel_lsp03"}])

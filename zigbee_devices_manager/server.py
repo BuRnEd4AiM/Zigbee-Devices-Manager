@@ -1079,6 +1079,97 @@ async def collect_usages(body, mapping):
     return find_usages(items, mapping), unreadable, notes
 
 
+# ---------- Verweise auf fehlende Entitäten (z. B. Karten nach einer Umbenennung) ----------
+# Entity-ID im Text; davor kein Punkt/Schrägstrich (Hostnamen, Pfade, states.light.x), dahinter kein weiterer Punkt
+ENTITY_REF_RE = re.compile(r"(?<![\w./:-])([a-z_][a-z0-9_]*)\.([a-z0-9_]+)(?![\w.])")
+RENAME_LOG_KEEP = 5000
+
+
+def rename_log_file():
+    return backup_root() / "entity-id-verlauf.json"
+
+
+def log_renames(renamed):
+    """Merkt sich jede Änderung einer Entity-ID (alt → neu) dauerhaft neben den Sicherungen – so findet „Verweise prüfen“
+    auch später noch das Ziel von Karten und Automationen, die auf eine alte ID zeigen."""
+    if not renamed:
+        return
+    path = rename_log_file()
+    try:
+        entries = json.loads(path.read_text())
+    except (OSError, ValueError):
+        entries = []
+    stamp = iso_now()
+    entries = (entries if isinstance(entries, list) else []) + [{"old": c["old"], "new": c["new"], "at": stamp} for c in renamed]
+    try:
+        write_json(path, entries[-RENAME_LOG_KEEP:])
+    except OSError as err:
+        log.warning("Verlauf der Entity-IDs nicht schreibbar: %r", err)
+
+
+def renamed_to(missing, known):
+    """Heutige Entity-ID zu alten IDs laut Verlauf (auch über mehrere Umbenennungen hinweg)."""
+    try:
+        entries = json.loads(rename_log_file().read_text())
+    except (OSError, ValueError):
+        return {}
+    step = {e["old"]: e["new"] for e in entries if isinstance(e, dict) and e.get("old") and e.get("new")}  # spätere gewinnen
+    out = {}
+    for old in missing:
+        cur, seen = old, set()
+        while cur not in known and cur in step and cur not in seen:
+            seen.add(cur)
+            cur = step[cur]
+        if cur != old and cur in known:
+            out[old] = cur
+    return out
+
+
+async def known_entities():
+    """Alle Entity-IDs in Home Assistant (Registry und Zustände – auch YAML-Entitäten ohne unique_id) und die Zustände."""
+    states, entities = await ha([{"type": "get_states"}, {"type": "config/entity_registry/list"}])
+    return {st["entity_id"] for st in states} | {e["entity_id"] for e in entities}, states
+
+
+async def broken_references():
+    """Automationen, Skripte, Szenen und Dashboards (über die Oberfläche gepflegt), die Entitäten nennen, die es in
+    Home Assistant nicht gibt. Aktionen wie light.turn_on zählen nicht. Mit Vorschlägen aus dem Verlauf der Entity-IDs
+    und den vorhandenen Entitäten der betroffenen Domänen zur Auswahl."""
+    known, states = await known_entities()
+    services = (await ha([{"type": "get_services"}]))[0]
+    domains = {k.partition(".")[0] for k in known}
+    actions = {f"{d}.{a}" for d, acts in services.items() for a in acts}
+    items, unreadable = await scan_configs()
+    found = []
+    for it in items:
+        missing = sorted({m.group(0) for m in ENTITY_REF_RE.finditer(item_text(it))
+                          if m.group(1) in domains and m.group(0) not in known and m.group(0) not in actions})
+        if missing:
+            found.append({**{k: it[k] for k in ("kind", "id", "title")}, "entities": missing})
+    missing = sorted({e for f in found for e in f["entities"]})
+    names = {st["entity_id"]: st["attributes"].get("friendly_name", "") for st in states}
+    wanted = {m.partition(".")[0] for m in missing}
+    choices = {d: [{"id": k, "name": names.get(k, "")} for k in sorted(known) if k.partition(".")[0] == d] for d in wanted}
+    return {"items": found, "missing": missing, "suggestions": renamed_to(missing, known), "choices": choices,
+            "scanned": len(items), "unreadable": unreadable}
+
+
+async def check_references(request):
+    return web.json_response(await broken_references())
+
+
+async def repair_references(request):
+    """Ersetzt Verweise auf fehlende Entitäten durch die gewählten (vorhandenen) Entity-IDs – nur Text-Ersatz der IDs,
+    alles andere an Karten und Automationen bleibt; vorher gesichert. Danach wird erneut geprüft."""
+    known, _ = await known_entities()
+    mapping = {old: new for old, new in ((await request.json()).get("mapping") or {}).items()
+               if isinstance(old, str) and ENTITY_REF_RE.fullmatch(old) and old not in known and new in known}
+    if not mapping:
+        raise web.HTTPBadRequest(text="Keine gültige Zuordnung – das Ziel muss eine vorhandene Entität sein")
+    changed, _, _, errors = await replace_references({"update_references": True}, mapping)
+    return web.json_response({"updated_references": changed, "errors": errors, **await broken_references()})
+
+
 async def resolve_areas(body, items):
     """Ziel-Bereich je Gerät (nur wenn „Raum als Bereich setzen“ aktiv und der Bereich sich ändert)."""
     out = {}
@@ -1578,6 +1669,7 @@ async def apply(request):
     if z2m_mode and mine:
         after = await entity_ids_by_key()
         renamed = sorted(({"old": before[k], "new": after[k]} for k in mine if k in after and after[k] != before[k]), key=lambda c: c["old"])
+        log_renames(renamed)
 
     changed_refs, unreadable, notes = [], 0, []
     prog(pid, "Suche Verweise …", 0)
@@ -1660,6 +1752,8 @@ def make_app():
         web.post("/api/apply", apply),
         web.post("/api/verify", verify),
         web.post("/api/fix_references", fix_references),
+        web.get("/api/references", check_references),
+        web.post("/api/references/repair", repair_references),
         web.get("/api/progress", progress),
         web.get("/api/z2m_bases", z2m_bases),
         web.post("/api/assign_area", assign_area),
