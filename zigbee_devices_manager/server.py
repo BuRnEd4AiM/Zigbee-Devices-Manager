@@ -912,15 +912,85 @@ async def entity_registries():
 def mark_stale_ids(out, entities, devices, areas):
     """Benannte Geräte, deren Entity-IDs nicht zum Gerätenamen passen – z. B. noch der Name vom Anlernen über Matter,
     oft mit dem Bereich davor (light.wohnzimmer_s2_wzel03 statt light.s2_wzel_lsp03). Je Gerät landen die IDs, die
-    „Entity-IDs angleichen“ ändern würde, unter "stale_ids" (mit "reason", wenn die neue ID schon vergeben ist)."""
+    „Entity-IDs angleichen“ ändern würde, unter "stale_ids"; die, deren neue ID es schon gibt (doppelte Entität, meist eine
+    Altlast vom früheren Namen), unter "dup_ids" – Angleichen kann sie nicht auflösen."""
     named = [d for d in out if not d["is_new"]]
     items = [{"device_id": d["id"], "name": d["name"], "old_name": d["name"], "orig_name": d["orig_name"]} for d in named]
     changes, skipped, _ = entity_changes(items, entities, devices, areas)
     by_dev = {}
-    for c in changes + skipped:
-        by_dev.setdefault(c["device_id"], []).append({k: v for k, v in c.items() if k != "device_id"})
+    for key, rows in (("stale_ids", changes), ("dup_ids", skipped)):
+        for c in rows:
+            by_dev.setdefault((c["device_id"], key), []).append({"old": c["old"], "new": c["new"]})
     for d in named:
-        d["stale_ids"] = sorted(by_dev.get(d["id"], []), key=lambda c: c["old"])
+        for key in ("stale_ids", "dup_ids"):
+            d[key] = sorted(by_dev.get((d["id"], key), []), key=lambda c: c["old"])
+
+
+# ---------- Doppelte Entitäten (alte ID neben der schon vorhandenen neuen) ----------
+REMOVABLE = ("verwaist", "deaktiviert")
+
+
+def entity_status(ent, state):
+    """aktiv | verwaist (die Integration liefert die Entität nicht mehr; HA hält nur den letzten Zustand) | deaktiviert |
+    ohne Zustand (z. B. Integration nicht geladen)."""
+    if ent.get("disabled_by"):
+        return "deaktiviert"
+    if state is None:
+        return "ohne Zustand"
+    return "verwaist" if state.get("attributes", {}).get("restored") else "aktiv"
+
+
+async def entity_statuses():
+    entities, states = await ha([{"type": "config/entity_registry/list"}, {"type": "get_states"}])
+    by_id = {st["entity_id"]: st for st in states}
+    return {e["entity_id"]: {"status": entity_status(e, by_id.get(e["entity_id"])), "device_id": e.get("device_id") or "",
+                             "name": (by_id.get(e["entity_id"]) or {}).get("attributes", {}).get("friendly_name", "")} for e in entities}
+
+
+async def entity_info(request):
+    """Zustand der Entitäten doppelter Paare und wo sie verwendet werden (Automationen, Skripte, Szenen, Dashboards)."""
+    ids = [i for i in (await request.json()).get("entity_ids", []) if isinstance(i, str) and ENTITY_REF_RE.fullmatch(i)][:200]
+    status = await entity_statuses()
+    usages, unreadable, _ = await collect_usages({"update_references": True}, {i: i for i in ids}) if ids else ([], 0, [])
+    return web.json_response({"entities": {i: status.get(i) for i in ids}, "usages": usages, "unreadable": unreadable})
+
+
+async def dedupe_entities(request):
+    """Löst doppelte Entitäten auf – am Ende gibt es nur noch die neue ID, und Verweise auf die alte zeigen auf sie.
+    remove_old: die alte (verwaiste/deaktivierte) Entität entfernen. replace_new: die verwaiste/deaktivierte Entität unter der
+    neuen ID entfernen und die alte (aktive) dorthin umbenennen. Aktive Entitäten werden nie entfernt. Vorher wird gesichert."""
+    body = await request.json()
+    pairs = [p for p in body.get("pairs", []) if isinstance(p, dict) and p.get("action") in ("remove_old", "replace_new")]
+    if not pairs:
+        raise web.HTTPBadRequest(text="Nichts zu tun")
+    status = await entity_statuses()
+    await safe_backup("vor-entfernen")
+    done, errors, mapping = [], [], {}
+    for p in pairs:
+        old, new, action = p.get("old"), p.get("new"), p["action"]
+        st_old, st_new = (status.get(old) or {}).get("status"), (status.get(new) or {}).get("status")
+        if action == "remove_old" and st_old in REMOVABLE and st_new:
+            ok, res = await ha_try({"type": "config/entity_registry/remove", "entity_id": old})
+        elif action == "replace_new" and st_new in REMOVABLE and st_old:
+            ok, res = await ha_try({"type": "config/entity_registry/remove", "entity_id": new})
+            if ok:
+                ok, res = await ha_try({"type": "config/entity_registry/update", "entity_id": old, "new_entity_id": new})
+        else:
+            errors.append({"device": old or "?", "error": f"Nicht möglich: {old} ist {st_old or 'nicht vorhanden'}, {new} ist {st_new or 'nicht vorhanden'} – "
+                                                         "entfernt werden nur verwaiste oder deaktivierte Entitäten"})
+            continue
+        if ok:
+            mapping[old] = new
+            done.append({"old": old, "new": new, "action": action})
+        else:
+            errors.append({"device": old, "error": res})
+    changed = []
+    if mapping:
+        log_renames([{"old": o, "new": n} for o, n in mapping.items()])
+        changed, _, _, ref_errors = await replace_references({"update_references": True, "update_yaml": body.get("update_yaml"),
+                                                              "update_nodered": body.get("update_nodered")}, mapping)
+        errors += ref_errors
+    return web.json_response({"done": done, "errors": errors, "updated_references": changed})
 
 
 def ekey(ent):
@@ -1781,6 +1851,8 @@ def make_app():
         web.post("/api/fix_references", fix_references),
         web.get("/api/references", check_references),
         web.post("/api/references/repair", repair_references),
+        web.post("/api/entities/info", entity_info),
+        web.post("/api/entities/dedupe", dedupe_entities),
         web.get("/api/progress", progress),
         web.get("/api/z2m_bases", z2m_bases),
         web.post("/api/assign_area", assign_area),
