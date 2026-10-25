@@ -67,6 +67,46 @@ class EntityChanges(unittest.TestCase):
         self.assertEqual([(s["old"], s["new"]) for s in skipped], [("light.wohnzimmer_s2_wzel4", "light.s2_wzel_lsp04")])
 
 
+class Zigbee2MqttPartlyRenamed(unittest.TestCase):
+    """Z2M hat beim Umbenennen nur einen Teil der Entity-IDs mitgenommen (abgeschaltete wie linkquality/update_* blieben):
+    H1-WZFL-TAS02 hat h1_wzfl_tas02_battery, aber noch h1_wz_tas02_linkquality usw."""
+    IEEE = "0x001788010b1c2d3e"
+
+    def z2m(self, entity_id, prop, original_name=""):
+        return {**ent(entity_id, "t", original_name), "platform": "mqtt", "unique_id": f"{self.IEEE}_{prop}_zigbee2mqtt"}
+
+    def entities(self, with_uid=True):
+        rows = [("sensor.h1_wzfl_tas02_battery", "battery", "Battery"), ("event.h1_wzfl_tas02_action", "action", "Action"),
+                ("sensor.h1_wz_tas02_linkquality", "linkquality", "Linkquality"),
+                ("sensor.h1_wz_tas02_update_state", "update_state", "Update state"),
+                ("binary_sensor.h1_wz_tas02_update_available", "update_available", None)]  # Z2M: ohne eigenen Namen
+        return [self.z2m(e, p, n) if with_uid else ent(e, "t", n) for e, p, n in rows]
+
+    def check(self, entities):
+        items = [{"device_id": "t", "name": "H1-WZFL-TAS02", "old_name": "H1-WZFL-TAS02", "orig_name": "H1-WZFL-TAS02"}]
+        changes, skipped, _ = server.entity_changes(items, entities, [dev("t", None)], AREAS)
+        self.assertEqual(mapping(changes), {"sensor.h1_wz_tas02_linkquality": "sensor.h1_wzfl_tas02_linkquality",
+                                            "sensor.h1_wz_tas02_update_state": "sensor.h1_wzfl_tas02_update_state",
+                                            "binary_sensor.h1_wz_tas02_update_available": "binary_sensor.h1_wzfl_tas02_update_available"})
+        self.assertEqual(skipped, [])
+
+    def test_endings_from_z2m_unique_id(self):
+        self.check(self.entities())
+
+    def test_no_doubling_without_unique_id(self):
+        """Ohne Z2M-unique_id: gemeinsamer Anfang nur der noch alten IDs (h1_wz_tas02), nicht „h1“ über alle."""
+        self.check(self.entities(with_uid=False))
+
+    def test_z2m_light_keeps_no_type_suffix(self):
+        """Z2M lässt den Typ weg: light.flur_light ist das Licht selbst (unique_id …_light_…), light.flur_light_l1 Endpunkt l1."""
+        entities = [self.z2m("light.flur_light", "light"), self.z2m("light.flur_light_l1", "light_l1", "L1"),
+                    self.z2m("sensor.flur_light_linkquality", "linkquality", "Linkquality")]
+        items = [{"device_id": "t", "name": "H1-FL-LP01", "old_name": "Flur Light", "orig_name": "Flur Light"}]
+        changes, _, _ = server.entity_changes(items, entities, [dev("t", None)], AREAS)
+        self.assertEqual(mapping(changes), {"light.flur_light": "light.h1_fl_lp01", "light.flur_light_l1": "light.h1_fl_lp01_l1",
+                                            "sensor.flur_light_linkquality": "sensor.h1_fl_lp01_linkquality"})
+
+
 class StaleIds(unittest.TestCase):
     def test_marks_only_named_devices_with_old_ids(self):
         out = [

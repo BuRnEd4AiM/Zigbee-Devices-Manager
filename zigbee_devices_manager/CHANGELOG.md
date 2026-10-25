@@ -1,5 +1,11 @@
 # Änderungen
 
+## 0.12.1
+
+*25.10.2026*
+
+- **Korrektur „Entity-IDs angleichen“:** Hatte Zigbee2MQTT beim Umbenennen nur einen Teil der Entity-IDs mitgenommen (meist die abgeschalteten wie `linkquality`, `update_state`, `update_available`), schlug die Vorschau doppelte oder abgeschnittene IDs vor – z. B. `sensor.h1_wzfl_tas02_wz_tas02_linkquality` statt `sensor.h1_wzfl_tas02_linkquality` und `binary_sensor.h1_wzfl_tas02` statt `…_update_available`. Jetzt liest das Add-on die Endung einer Zigbee2MQTT-Entität aus deren eindeutiger Kennung ab, nimmt als alten Namen nur den gemeinsamen Anfang der *noch alten* IDs und verwirft Vermutungen, die bloß der Anfang des neuen Namens sind (wie `h1`).
+
 ## 0.12.0
 
 *25.10.2026*
