@@ -1,5 +1,13 @@
 # Änderungen
 
+## 0.12.0
+
+*25.10.2026*
+
+- **Entity-IDs sauber umbenennen, auch bei Matter:** Home Assistant setzt seit einiger Zeit den Bereich vor neue Entity-IDs (`light.wohnzimmer_s2_wzel03` für das Gerät „WZEL03“ im Bereich „Wohnzimmer (S2)“). Das Add-on hat diesen Anfang bisher nicht als alten Namen erkannt – vor allem bei Geräten mit nur einer Entität blieb die ID dann beim Umbenennen stehen. Jetzt wird der Bereich davor erkannt (auch ein früherer), ebenso die ID der Haupt-Entität des Geräts. Ergebnis: `light.s2_wzel_lsp03`.
+- **Neu: „⚠ Entity-IDs angleichen“** für schon benannte Geräte, deren Entity-IDs noch den Namen vom Anlernen tragen. Der Knopf steht in der Zeile unter „✓ aktuell“, dazu der Filter „Alte Entity-IDs (n)“ und ein Sammelknopf für alle ausgewählten (oder alle sichtbaren) Geräte. Gerätename und Bereich bleiben; mit Vorschau, Anpassen der Verweise in Automationen/Dashboards (z. B. Karten mit den alten IDs), Sicherung und Prüfung. Danach findet Home Assistant die Entitäten auch beim Tippen von z. B. `lsp02` im YAML-Editor.
+- Heißt ein Gerät in Zigbee2MQTT schon wie gewünscht, wartet das Umbenennen nicht mehr vergeblich darauf, dass Z2M die Entity-IDs ändert.
+
 ## 0.11.0
 
 *24.10.2026*
