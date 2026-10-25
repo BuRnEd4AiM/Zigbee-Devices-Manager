@@ -8,7 +8,7 @@ German version: [README.md](README.md)
 
 ## Features
 
-- List of all new and existing Zigbee devices, inline rename, search, "new" filter
+- List of all new and existing Zigbee devices, inline rename, search, "new" filter; plus filters by house, floor, room and type (with counts, "ohne Raum/Typ" finds gaps) – bulk actions only affect the visible devices
 - **Matter devices (Thread/Wi-Fi):** all devices of the Matter integration appear in the list as well – under the gateway "Matter", with their node ID instead of an IEEE (plus the endpoint for devices behind a Matter bridge). They use the same naming scheme, house/floor/room/type and running numbers as the Zigbee devices; renaming happens in Home Assistant (`name_by_user`), including entity IDs, references and area. A Matter device counts as new as long as it has no custom name in HA. Matter devices are still paired in the Home Assistant app.
 - **Configurable naming scheme**, e.g. `{room}_{type}_{nr}` → `WZ_LP_01`
   - Abbreviations for rooms and device types, selectable per device
