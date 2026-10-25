@@ -1,5 +1,12 @@
 # Änderungen
 
+## 0.14.0
+
+*25.10.2026*
+
+- **„Alte Entity-IDs“ verschwinden jetzt auch:** Gab es die richtige ID schon, blieb ein Gerät dauerhaft unter „Alte Entity-IDs“ stehen – „Angleichen“ zeigte nur „keine Änderung, übersprungen (ID existiert bereits)“, auch nach dem Neu-Laden. Solche Geräte haben eine Entität **doppelt** (meist eine Altlast vom früheren Namen, z. B. `sensor.01_s2_lichtschalter_sw_wohnzimmer_last_seen_2` neben `sensor.s2_wzel_tas01_last_seen`). Sie zählen jetzt nicht mehr als „Alte Entity-IDs“.
+- **Neu: „Doppelte Entitäten“** – Filter, Knopf in der Zeile und Sammelknopf. Der Dialog zeigt beide Entitäten mit Zustand (aktiv, verwaist = wird von der Integration nicht mehr geliefert, deaktiviert) und wo sie verwendet werden. Verwaiste oder deaktivierte Altlasten entfernt das Add-on auf Wunsch; Automationen und Dashboards mit der alten ID werden dabei auf die richtige umgestellt (vorher gesichert). Ist die Entität mit der richtigen ID die verwaiste, wird sie entfernt und die aktive bekommt ihre ID. Aktive Entitäten werden nie entfernt – liefern beide Werte, sagt der Dialog, was zu prüfen ist.
+
 ## 0.13.0
 
 *25.10.2026*

@@ -397,6 +397,8 @@ const DEMO_MATTER = [
   ["Hue color lamp", "Signify Netherlands B.V.", "LCA001", 8, 11, "Büro", null]
 ].map((d, i) => ({id: "demoM" + i, source: "matter", bridge: "matter", orig_name: d[0], manufacturer: d[1], model: d[2], ieee: "", node: d[3], endpoint: d[4], area: d[5],
   is_new: !d[6], name: d[6] || d[0], area_id: d[5] ? "area_" + d[5].toLowerCase().replace("ü", "ue") : "", config_url: ""}));
+// Doppelt: neben sensor.wz_lp_05_linkquality hängt noch die verwaiste Entität vom früheren Namen „Wohnzimmer Stehlampe“
+DEMO_DEVICES[1].dup_ids = [{old: "sensor.wohnzimmer_stehlampe_linkquality_2", new: "sensor.wz_lp_05_linkquality"}];
 // Benannt, aber die Entity-IDs tragen noch den Namen vom Anlernen – mit Bereich davor, wie Home Assistant neue IDs anlegt
 DEMO_MATTER[1].stale_ids = [{old: "button.wohnzimmer_nanoleaf_essentials_a19_identify", new: "button.wz_lp_02_identify"}, {old: "light.wohnzimmer_nanoleaf_essentials_a19", new: "light.wz_lp_02"}];
 
@@ -463,6 +465,7 @@ const api = {
     try { const n = JSON.parse(localStorage.getItem("zdm-demo-names") || "{}"); devices.forEach(d => { if (n[d.id]) { d.name = n[d.id]; d.is_new = false; } }); } catch (e) {}
     try { const gone = JSON.parse(localStorage.getItem("zdm-demo-deleted") || "[]"); devices = devices.filter(d => !gone.includes(d.id)); } catch (e) {}
     try { const fixed = JSON.parse(localStorage.getItem("zdm-demo-ids") || "[]"); devices.forEach(d => { if (fixed.includes(d.id)) d.stale_ids = []; }); } catch (e) {}
+    try { const gone = JSON.parse(localStorage.getItem("zdm-demo-dups") || "[]"); devices.forEach(d => { if (d.dup_ids) d.dup_ids = d.dup_ids.filter(c => !gone.includes(c.old)); }); } catch (e) {}
     return {devices, store, bridges: DEMO_BRIDGES, areas: DEMO_AREAS, floors: DEMO_FLOORS};
   },
   async saveStore(store) {
@@ -559,6 +562,22 @@ const api = {
       return {...await this.checkRefs(), updated_references: [{kind: "dashboard", title: "Licht"}], errors: []};
     }
     return this.post("api/references/repair", {mapping});
+  },
+  // ---- Doppelte Entitäten: Zustand abfragen und auflösen ----
+  async entityInfo(ids) {
+    if (this.demo) {
+      const st = {"sensor.wohnzimmer_stehlampe_linkquality_2": "verwaist", "sensor.wz_lp_05_linkquality": "aktiv"};
+      return {entities: Object.fromEntries(ids.map(i => [i, {status: st[i] || "aktiv", name: "", device_id: ""}])), unreadable: 0,
+        usages: [{kind: "dashboard", id: "licht", title: "Licht", entities: ids.filter(i => i.endsWith("_2"))}]};
+    }
+    return this.post("api/entities/info", {entity_ids: ids});
+  },
+  async dedupe(pairs) {
+    if (this.demo) {
+      try { const f = JSON.parse(localStorage.getItem("zdm-demo-dups") || "[]"); localStorage.setItem("zdm-demo-dups", JSON.stringify([...f, ...pairs.map(p => p.old)])); } catch (e) {}
+      return {done: pairs, errors: [], updated_references: [{kind: "dashboard", title: "Licht"}]};
+    }
+    return this.post("api/entities/dedupe", {pairs, update_yaml: S.renameEntities && S.updateYaml, update_nodered: S.renameEntities && S.updateNodered});
   },
   // ---- Löschen: Vorschau, Ausführung, erneute Prüfung ----
   delPayload: list => list.map(d => ({device_id: d.id, name: d.name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || ""})),
@@ -707,6 +726,8 @@ const gwOf = d => S.gateways[d.bridge] || {};
 const addrOf = d => d.source !== "matter" ? d.ieee || "" : d.node == null ? "" : "Node " + d.node + (d.endpoint == null ? "" : " · Endpunkt " + d.endpoint);
 /** Benanntes Gerät, dessen Entity-IDs noch nicht zum Namen passen (z. B. light.wohnzimmer_s2_wzel03 bei S2-WZEL-LSP03). */
 const staleIds = d => !d.planned && !d.is_new ? d.stale_ids || [] : [];
+/** Entitäten, deren neue ID es schon gibt (doppelt, meist eine Altlast vom früheren Namen) – Angleichen kann sie nicht auflösen. */
+const dupIds = d => !d.planned && !d.is_new ? d.dup_ids || [] : [];
 const houseOf = d => S.scheme.houses.find(h => h.id === (S.meta[d.id]?.house || gwOf(d).house || S.scheme.defaultHouse));
 const useHouse = () => S.scheme.pattern.includes("{house}");
 const useFloor = () => S.scheme.pattern.includes("{floor}");
@@ -898,6 +919,7 @@ function renderDevices() {
     if (S.filter === "planned" && !d.planned) return false;
     if (S.filter === "odd" && (d.is_new || d.planned || parseName(d.name))) return false;
     if (S.filter === "ids" && !staleIds(d).length) return false;
+    if (S.filter === "dups" && !dupIds(d).length) return false;
     if (S.gwFilter && d.bridge !== S.gwFilter) return false;
     return !q || [d.name, d.orig_name, addrOf(d), d.model, d.manufacturer, d.area, SOURCE_NAMES[d.source]].join(" ").toLowerCase().includes(q);
   };
@@ -919,13 +941,14 @@ function renderDevices() {
   const applicable = rows.filter(d => sug.has(d.id) && sug.get(d.id) !== d.name && (!S.sel.size || S.sel.has(d.id)));
   // Entity-IDs angleichen: nur ohne ausstehende Umbenennung – die zieht die IDs ohnehin mit
   const idsDue = d => staleIds(d).length && !(sug.has(d.id) && sug.get(d.id) !== d.name);
+  const dupAll = allRows().filter(d => dupIds(d).length).length, dupRows = rows.filter(d => dupIds(d).length && (!S.sel.size || S.sel.has(d.id)));
   const staleAll = allRows().filter(idsDue).length, staleRows = rows.filter(d => idsDue(d) && (!S.sel.size || S.sel.has(d.id)));
   const multiGw = S.bridges.length > 1, gwLabel = id => S.gateways[id]?.label || S.bridges.find(b => b.id === id)?.name || "";
 
   $("#tab-devices").innerHTML = `
     <div class="bar">
       <input id="q" type="search" placeholder="Suchen (Name, IEEE, Modell, Raum)…" value="${esc(S.q)}" style="width:280px">
-      <div class="chips">${[["all", "Alle"], ["new", "Neu (" + counts.new + ")"], ["named", "Benannt"], ["odd", "Passt nicht (" + allRows().filter(d => !d.is_new && !d.planned && !parseName(d.name)).length + ")"], ["planned", "Geplant"], ...(staleAll || S.filter === "ids" ? [["ids", "Alte Entity-IDs (" + staleAll + ")"]] : [])].map(([k, l]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}">${l}</button>`).join("")}</div>
+      <div class="chips">${[["all", "Alle"], ["new", "Neu (" + counts.new + ")"], ["named", "Benannt"], ["odd", "Passt nicht (" + allRows().filter(d => !d.is_new && !d.planned && !parseName(d.name)).length + ")"], ["planned", "Geplant"], ...(staleAll || S.filter === "ids" ? [["ids", "Alte Entity-IDs (" + staleAll + ")"]] : []), ...(dupAll || S.filter === "dups" ? [["dups", "Doppelte Entitäten (" + dupAll + ")"]] : [])].map(([k, l]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}">${l}</button>`).join("")}</div>
       ${multiGw ? `<select id="gwf"><option value="">Alle Gateways</option>${S.bridges.map(b => `<option value="${esc(b.id)}"${S.gwFilter === b.id ? " selected" : ""}>${esc(gwLabel(b.id))}</option>`).join("")}</select>` : ""}
       <span style="flex:1"></span>
       <button class="btn" id="fromNames" title="Liest Haus, Etage, Raum und Typ aus den vorhandenen Namen (nach deinen Kürzeln) und wählt sie aus. Passende Namen bleiben unverändert.">⟳ Aus Namen zuordnen</button>
@@ -956,6 +979,7 @@ function renderDevices() {
       <label class="sub" title="Ersetzt die alten Entity-IDs in allen YAML-Dateien unter /config (Packages, configuration.yaml, …). Danach Konfiguration prüfen und neu laden. Setzt den Haken bei „Entity-IDs“ automatisch mit."><input type="checkbox" id="rYaml" ${S.updateYaml && S.renameEntities ? "checked" : ""}> YAML-Dateien anpassen</label>
       <label class="sub" title="Ersetzt die alten Entity-IDs in den Node-RED-Flows. Node-RED danach neu starten. Setzt den Haken bei „Entity-IDs“ automatisch mit."><input type="checkbox" id="rNode" ${S.updateNodered && S.renameEntities ? "checked" : ""}> Node-RED-Flows anpassen</label>
       ${staleAll ? `<button class="btn" id="fixAll" ${staleRows.length ? "" : "disabled"} title="Benennt die Entity-IDs benannter Geräte nach ihrem Namen um, z. B. light.wohnzimmer_s2_wzel03 → light.s2_wzel_lsp03. Name und Bereich bleiben. Mit Vorschau.">Entity-IDs angleichen (${staleRows.length})</button>` : ""}
+      ${dupAll ? `<button class="btn" id="dupAll" ${dupRows.length ? "" : "disabled"} title="Zeigt Entitäten, die es doppelt gibt (die richtige ID ist schon vergeben), mit Zustand – verwaiste/deaktivierte Altlasten lassen sich entfernen">Doppelte Entitäten auflösen (${dupRows.length})</button>` : ""}
       <button class="btn primary" id="applyAll" ${applicable.length ? "" : "disabled"}>${applicable.length} ${S.sel.size ? "ausgewählte " : ""}Vorschläge übernehmen</button>
     </div>
     <div class="card"><table>
@@ -969,7 +993,7 @@ function renderDevices() {
         return `<tr data-id="${d.id}">
           <td><input type="checkbox" class="sel" ${S.sel.has(d.id) ? "checked" : ""}></td>
           <td class="name" title="Klicken zum Bearbeiten">${nameCell}</td>
-          <td>${!d.planned && r && r.id !== undefined && (r.area_id ? r.area_id !== d.area_id : r.name.toLowerCase() !== (d.area || "").toLowerCase()) ? `<button class="btn setArea" title="Nur den Raum in Home Assistant setzen, Name bleibt">Raum setzen</button> ` : ""}${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}${idsDue(d) ? `<div><button class="btn fixIds" title="${esc("Entity-IDs passen nicht zum Namen:\n" + staleIds(d).map(c => c.old + " → " + c.new + (c.reason ? " (" + c.reason + ")" : "")).join("\n"))}">⚠ Entity-IDs angleichen (${staleIds(d).length})</button></div>` : ""}</td>
+          <td>${!d.planned && r && r.id !== undefined && (r.area_id ? r.area_id !== d.area_id : r.name.toLowerCase() !== (d.area || "").toLowerCase()) ? `<button class="btn setArea" title="Nur den Raum in Home Assistant setzen, Name bleibt">Raum setzen</button> ` : ""}${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}${idsDue(d) ? `<div><button class="btn fixIds" title="${esc("Entity-IDs passen nicht zum Namen:\n" + staleIds(d).map(c => c.old + " → " + c.new + (c.reason ? " (" + c.reason + ")" : "")).join("\n"))}">⚠ Entity-IDs angleichen (${staleIds(d).length})</button></div>` : ""}${dupIds(d).length ? `<div><button class="btn dupIds" title="${esc("Diese Entitäten gibt es doppelt – die richtige ID ist schon vergeben:\n" + dupIds(d).map(c => c.old + " ↔ " + c.new).join("\n"))}">⚠ Doppelte Entitäten (${dupIds(d).length})</button></div>` : ""}</td>
           ${multiGw ? `<td class="sub">${esc(d.planned ? "" : gwLabel(d.bridge))}</td>` : ""}
           <td><select class="house">${houseOpts(houseOf(d)?.id)}</select></td>
           <td><select class="floor">${floorOpts(floorOf(d)?.id)}</select></td>
@@ -1018,6 +1042,7 @@ function renderDevices() {
     persist(); renderDevices();
   };
   $("#fixAll", root) && ($("#fixAll", root).onclick = () => fixEntityIds(staleRows));
+  $("#dupAll", root) && ($("#dupAll", root).onclick = () => resolveDuplicates(dupRows));
   $("#applyAll", root).onclick = async () => {
     const n = await applyBatch(applicable.map(d => [d, sug.get(d.id)]));
     if (n) toast(n + " Namen übernommen"); renderDevices();
@@ -1031,6 +1056,7 @@ function renderDevices() {
     $(".type", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], type: e.target.value}; persist(); renderDevices(); };
     $(".setArea", tr) && ($(".setArea", tr).onclick = () => assignAreas([d]));
     $(".fixIds", tr) && ($(".fixIds", tr).onclick = () => fixEntityIds([d]));
+    $(".dupIds", tr) && ($(".dupIds", tr).onclick = () => resolveDuplicates([d]));
     $(".lnk.ha", tr) && ($(".lnk.ha", tr).onclick = e => haNavigate(e, haDevicePath(d)));
     $(".lnk.z2m", tr) && ($(".lnk.z2m", tr).onclick = e => openZ2m(e, z2mLink(d)));
     $(".lnk.off", tr) && ($(".lnk.off", tr).onclick = () => showTab("gateways"));
@@ -1324,6 +1350,60 @@ async function checkReferences() {
   const load = async () => { draw(null); try { draw(await api.checkRefs()); } catch (e) { close(); toast("Prüfen fehlgeschlagen: " + e.message); } };
   document.body.appendChild(dlg); dlg.showModal(); dlg.oncancel = close;
   await load();
+}
+
+/** „Doppelte Entitäten“: Die richtige ID ist schon vergeben, daneben hängt eine zweite Entität mit der alten ID (meist eine Altlast
+ *  vom früheren Namen). Zeigt beide mit Zustand und Verwendung; verwaiste oder deaktivierte werden entfernt, Verweise auf die alte ID
+ *  zeigen danach auf die neue. Aktive Entitäten entfernt das Add-on nie. */
+async function resolveDuplicates(devs) {
+  const pairs = devs.flatMap(d => dupIds(d).map(c => ({...c, device: d})));
+  if (!pairs.length) return;
+  const kinds = {automation: "Automation", script: "Skript", scene: "Szene", dashboard: "Dashboard"};
+  const badge = st => `<span class="badge ${st === "aktiv" ? "ok" : st === "verwaist" ? "new" : ""}" title="${esc({aktiv: "liefert Werte", verwaist: "wird von der Integration nicht mehr geliefert – HA hält nur den letzten Stand", deaktiviert: "in Home Assistant deaktiviert", "ohne Zustand": "kein Zustand in Home Assistant (z. B. Integration nicht geladen)"}[st] || "")}">${esc(st || "fehlt")}</span>`;
+  const dlg = document.createElement("dialog");
+  dlg.style.cssText = "max-width:760px;width:94%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
+  const close = () => { dlg.close(); dlg.remove(); };
+  document.body.appendChild(dlg); dlg.showModal(); dlg.oncancel = close;
+  dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">⚠ Doppelte Entitäten</h2><p class="sub"><span class="spin"></span> Lese den Zustand aus Home Assistant …</p>`;
+  let info;
+  try { info = await api.entityInfo([...new Set(pairs.flatMap(p => [p.old, p.new]))]); } catch (e) { close(); toast("Fehler: " + e.message); return; }
+  const st = id => info.entities[id]?.status, used = id => info.usages.filter(u => u.entities.includes(id)).map(u => `${kinds[u.kind] || u.kind} „${esc(u.title)}“`).join(", ");
+  const removable = s => s === "verwaist" || s === "deaktiviert";
+  const actionOf = p => removable(st(p.old)) && st(p.new) ? "remove_old" : removable(st(p.new)) && st(p.old) === "aktiv" ? "replace_new" : "";
+  const text = {remove_old: p => `Alte Entität <code>${esc(p.old)}</code> entfernen – Verweise auf sie zeigen danach auf <code>${esc(p.new)}</code>.`,
+    replace_new: p => `Die verwaiste/deaktivierte <code>${esc(p.new)}</code> entfernen und die aktive <code>${esc(p.old)}</code> in <code>${esc(p.new)}</code> umbenennen.`};
+  dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">⚠ ${pairs.length} doppelte Entität(en)</h2>
+    <p class="sub">Die richtige Entity-ID ist schon vergeben – daneben hängt am Gerät eine zweite Entität mit der alten ID, meist eine Altlast vom früheren Namen. Deshalb kann „Entity-IDs angleichen“ hier nichts tun. Verwaiste oder deaktivierte Entitäten kann das Add-on entfernen; Automationen und Dashboards, die die alte ID nutzen, werden dabei auf die richtige umgestellt (vorher gesichert). Aktive Entitäten werden nie entfernt.</p>
+    <div style="max-height:52vh;overflow:auto">${pairs.map((p, i) => { const a = actionOf(p); return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+      <div class="sub"><b>${esc(p.device.name)}</b></div>
+      <div><code>${esc(p.old)}</code> ${badge(st(p.old))} <span class="sub">alte ID${used(p.old) ? " · verwendet in " + used(p.old) : ""}</span></div>
+      <div><code>${esc(p.new)}</code> ${badge(st(p.new))} <span class="sub">richtige ID${used(p.new) ? " · verwendet in " + used(p.new) : ""}</span></div>
+      ${a ? `<label class="sub" style="display:block;margin-top:6px"><input type="checkbox" data-i="${i}" checked> ${text[a](p)}</label>`
+        : `<p class="sub" style="margin:6px 0 0">${st(p.old) === "aktiv" && st(p.new) === "aktiv" ? "Beide liefern noch Werte – das Gerät wird wohl doppelt gemeldet (z. B. von zwei Zigbee2MQTT-Instanzen). Bitte in Zigbee2MQTT bzw. Home Assistant prüfen;" : "Der Zustand lässt keine sichere Entscheidung zu;"} das Add-on ändert hier nichts. <a href="${esc(haDevicePath(p.device))}" target="_top" class="lnk ha" data-dev="${esc(p.device.id)}">⌂ Gerät in HA</a></p>`}
+    </div>`; }).join("")}</div>
+    ${info.unreadable ? `<p class="sub">${info.unreadable} Automationen/Szenen sind YAML und wurden nicht geprüft.</p>` : ""}
+    <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="no">Schließen</button><button class="btn primary" id="go">Ausführen</button></div>`;
+  const sync = () => { const n = dlg.querySelectorAll("input[data-i]:checked").length; $("#go", dlg).disabled = !n; $("#go", dlg).textContent = n ? `Ausführen (${n})` : "Nichts ausgewählt"; };
+  dlg.querySelectorAll("input[data-i]").forEach(x => x.onchange = sync); sync();
+  dlg.querySelectorAll("a[data-dev]").forEach(x => x.onclick = e => { close(); haNavigate(e, x.getAttribute("href")); });
+  $("#no", dlg).onclick = close;
+  $("#go", dlg).onclick = async () => {
+    const chosen = [...dlg.querySelectorAll("input[data-i]:checked")].map(x => pairs[+x.dataset.i]).map(p => ({old: p.old, new: p.new, action: actionOf(p)}));
+    $("#go", dlg).disabled = true; $("#go", dlg).textContent = "Läuft …";
+    try {
+      const res = await api.dedupe(chosen);
+      const gone = new Set(res.done.map(x => x.old));
+      for (const d of devs) d.dup_ids = dupIds(d).filter(c => !gone.has(c.old));
+      await refreshFromHA(true); // maßgeblich ist, was Home Assistant wirklich hat
+      dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${res.errors.length ? "⚠️ Nicht alles hat geklappt" : "✅ Doppelte Entitäten aufgelöst"}</h2>
+        <div class="preview" style="line-height:1.6">${res.done.map(x => `✅ ${esc(x.old)} → <b>${esc(x.new)}</b>`).join("<br>") || "Nichts geändert."}
+        ${res.updated_references.length ? `<br>✅ Verweise angepasst in: ${res.updated_references.map(u => esc(u.title)).join(", ")}` : ""}
+        ${res.errors.map(e => `<br>❌ <b>${esc(e.device)}</b> <span class="sub">${esc(e.error)}</span>`).join("")}</div>
+        <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn primary" id="ok">Schließen</button></div>`;
+      $("#ok", dlg).onclick = close;
+    } catch (e) { toast("Fehler: " + e.message); close(); }
+    renderDevices();
+  };
 }
 
 /** Benennt die Entity-IDs benannter Geräte nach ihrem Namen um (z. B. light.wohnzimmer_s2_wzel03 → light.s2_wzel_lsp03) –

@@ -134,6 +134,15 @@ class StaleIds(unittest.TestCase):
                                                         "button.wohnzimmer_s2_wuel2_identify": "button.s2_wzel_lsp02_identify"})
         self.assertNotIn("stale_ids", out[2])
 
+    def test_existing_target_counts_as_duplicate_not_stale(self):
+        """Gibt es die neue ID schon (Altlast vom früheren Namen), kann Angleichen nichts tun: dup_ids statt stale_ids."""
+        out = [{"id": "d", "name": "S2-WZEL-TAS01", "orig_name": "", "is_new": False}]
+        entities = [ent("sensor.s2_wzel_tas01_last_seen", "d", "Last seen"), ent("sensor.s2_wzel_tas01_battery", "d", "Battery"),
+                    ent("sensor.wohnzimmer_s2_s2_wzel_tas01_last_seen", "d", "Last seen")]
+        server.mark_stale_ids(out, entities, [dev("d")], AREAS)
+        self.assertEqual(out[0]["stale_ids"], [])
+        self.assertEqual(out[0]["dup_ids"], [{"old": "sensor.wohnzimmer_s2_s2_wzel_tas01_last_seen", "new": "sensor.s2_wzel_tas01_last_seen"}])
+
     def test_collision_suffix_is_not_stale(self):
         """light.<name>_2 (alte verwaiste Entität belegt light.<name>) lässt sich nicht angleichen und gilt nicht als veraltet."""
         out = [{"id": "d", "name": "S2-WZEL-LSP07", "orig_name": "", "is_new": False}]
@@ -206,3 +215,83 @@ class BrokenReferences(unittest.IsolatedAsyncioTestCase):
                                     "light.weg": "light.gibts_nicht"}}                     # Ziel fehlt
         await server.repair_references(Req())
         self.assertEqual(self.replaced, [{"light.wohnzimmer_s2_wzel03": "light.s2_wzel_lsp03"}])
+
+
+class DuplicateEntities(unittest.IsolatedAsyncioTestCase):
+    """„Doppelte Entitäten“ auflösen: nur verwaiste/deaktivierte Entitäten werden entfernt, Verweise zeigen danach auf die neue ID."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = {k: getattr(server, k) for k in ("ha", "safe_backup", "replace_references", "backup_root")}
+        server.backup_root = lambda: Path(self.tmp.name)
+        self.calls, self.replaced = [], []
+        self.registry = {"sensor.alt_last_seen_2": {}, "sensor.neu_last_seen": {}, "sensor.alt_linkquality": {"disabled_by": "integration"},
+                         "sensor.neu_linkquality": {}, "sensor.alt_battery": {}, "sensor.neu_battery": {}}
+        self.states = {"sensor.alt_last_seen_2": {"restored": True}, "sensor.neu_last_seen": {}, "sensor.neu_linkquality": {},
+                       "sensor.alt_battery": {}, "sensor.neu_battery": {"restored": True}}
+
+        async def ha(cmds):
+            out = []
+            for c in cmds:
+                self.calls.append(c)
+                if c["type"] == "config/entity_registry/list":
+                    out.append([{"entity_id": k, **v} for k, v in self.registry.items()])
+                elif c["type"] == "get_states":
+                    out.append([{"entity_id": k, "attributes": v} for k, v in self.states.items()])
+                elif c["type"] == "config/entity_registry/remove":
+                    self.registry.pop(c["entity_id"]); out.append({})
+                elif c["type"] == "config/entity_registry/update":
+                    self.registry[c["new_entity_id"]] = self.registry.pop(c["entity_id"]); out.append({})
+            return out
+
+        async def noop(*a, **k):
+            return None
+
+        async def replace_references(body, mapping):
+            self.replaced.append(mapping)
+            return [], 0, [], []
+
+        server.ha, server.safe_backup, server.replace_references = ha, noop, replace_references
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(server, k, v)
+        self.tmp.cleanup()
+
+    async def run_dedupe(self, pairs):
+        class Req:
+            async def json(self):
+                return {"pairs": pairs}
+        import json
+        return json.loads((await server.dedupe_entities(Req())).text)
+
+    async def test_status(self):
+        status = await server.entity_statuses()
+        self.assertEqual({k: v["status"] for k, v in status.items()},
+                         {"sensor.alt_last_seen_2": "verwaist", "sensor.neu_last_seen": "aktiv", "sensor.alt_linkquality": "deaktiviert",
+                          "sensor.neu_linkquality": "aktiv", "sensor.alt_battery": "aktiv", "sensor.neu_battery": "verwaist"})
+
+    async def test_remove_orphaned_or_disabled_old(self):
+        res = await self.run_dedupe([{"old": "sensor.alt_last_seen_2", "new": "sensor.neu_last_seen", "action": "remove_old"},
+                                     {"old": "sensor.alt_linkquality", "new": "sensor.neu_linkquality", "action": "remove_old"}])
+        self.assertEqual(res["errors"], [])
+        self.assertNotIn("sensor.alt_last_seen_2", self.registry)
+        self.assertNotIn("sensor.alt_linkquality", self.registry)
+        self.assertEqual(self.replaced, [{"sensor.alt_last_seen_2": "sensor.neu_last_seen", "sensor.alt_linkquality": "sensor.neu_linkquality"}])
+
+    async def test_replace_orphaned_new_with_active_old(self):
+        """Die neue ID gehört einer verwaisten Entität, die alte ist aktiv: Verwaiste weg, aktive bekommt die neue ID."""
+        res = await self.run_dedupe([{"old": "sensor.alt_battery", "new": "sensor.neu_battery", "action": "replace_new"}])
+        self.assertEqual(res["errors"], [])
+        self.assertIn("sensor.neu_battery", self.registry)
+        self.assertNotIn("sensor.alt_battery", self.registry)
+        self.assertEqual(self.registry["sensor.neu_battery"], {})  # die frühere sensor.alt_battery
+        self.assertEqual(self.replaced, [{"sensor.alt_battery": "sensor.neu_battery"}])
+
+    async def test_never_removes_active_entities(self):
+        res = await self.run_dedupe([{"old": "sensor.alt_battery", "new": "sensor.neu_battery", "action": "remove_old"},
+                                     {"old": "sensor.alt_last_seen_2", "new": "sensor.neu_last_seen", "action": "replace_new"}])
+        self.assertEqual(len(res["errors"]), 2)
+        self.assertEqual([c for c in self.calls if c["type"] != "config/entity_registry/list" and c["type"] != "get_states"], [])
+        self.assertEqual(self.replaced, [])
