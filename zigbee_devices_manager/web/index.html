@@ -20,6 +20,10 @@ main{padding:16px;width:100%}
 input,select,button{font:inherit;color:var(--fg)}
 input,select{background:var(--input);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0}
 input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.pick{flex:1;min-width:0}.pick input{width:100%}
+.pickres{margin-top:4px;border:1px solid var(--line);border-radius:6px;max-height:240px;overflow:auto;background:var(--card)}
+.pickres button{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);padding:6px 8px;cursor:pointer}
+.pickres button:hover,.pickres button.on{background:var(--chip)}.pickres .sub{display:block;padding:6px 8px}
 select.facet.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--input))}
 button.btn{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
 button.btn:hover{border-color:var(--accent)}
@@ -326,7 +330,8 @@ const api = {
       const missing = ["light.wohnzimmer_stehlampe", "light.wohnzimmer_nanoleaf_essentials_a19"].filter(m => !fixed.includes(m));
       return {items: missing.length ? [{kind: "dashboard", id: "licht", title: "Licht", entities: missing}] : [], missing, scanned: 7, unreadable: 0,
         suggestions: {"light.wohnzimmer_nanoleaf_essentials_a19": "light.wz_lp_02"},
-        choices: {light: [["light.wz_lp_02", "WZ_LP_02"], ["light.wz_lp_05", "WZ_LP_05"], ["light.ku_lp_01", "KU_LP_01"]].map(([id, name]) => ({id, name}))}};
+        choices: {light: [["light.wz_lp_02", "WZ_LP_02"], ["light.wz_lp_05", "WZ_LP_05"], ["light.ku_lp_01", "KU_LP_01"], ["light.s2_wzel_lsp01", "S2-WZEL-LSP01"],
+          ["light.s2_wzel_lsp02", "S2-WZEL-LSP02"], ["light.s2_wzel_lsp03", "S2-WZEL-LSP03"], ["light.h1_szfl_lp01", "H1-SZFL-LP01"], ["light.buero_stehlampe", "Büro Stehlampe"]].map(([id, name]) => ({id, name}))}};
     }
     const r = await fetch("api/references"); if (!r.ok) throw new Error(await r.text()); return r.json();
   },
@@ -1098,20 +1103,41 @@ async function checkReferences() {
   const draw = (r, note = "") => {
     if (!r) { dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">🔍 Verweise prüfen</h2><p class="sub"><span class="spin"></span> Durchsuche Automationen, Skripte, Szenen und Dashboards …</p>`; return; }
     const where = id => r.items.filter(i => i.entities.includes(id)).map(i => `${kinds[i.kind] || i.kind} „${esc(i.title)}“`).join(", ");
-    const opts = id => `<option value="">– Entität wählen –</option>` + (r.choices[id.split(".")[0]] || []).slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, "de", {numeric: true}))
-      .map(c => `<option value="${esc(c.id)}"${r.suggestions[id] === c.id ? " selected" : ""}>${esc(c.name ? c.name + " · " + c.id : c.id)}</option>`).join("");
+    const choices = id => r.choices[id.split(".")[0]] || [], label = c => c ? (c.name ? c.name + " · " + c.id : c.id) : "";
+    const chosen = Object.fromEntries(r.missing.filter(id => r.suggestions[id]).map(id => [id, r.suggestions[id]]));
     dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${r.missing.length ? `⚠ ${r.missing.length} fehlende Entität(en) in ${r.items.length} Automation(en)/Dashboard(s)` : "✅ Keine Verweise auf fehlende Entitäten"}</h2>
       ${note}
       <p class="sub">${r.scanned} Automationen, Skripte, Szenen und Dashboards durchsucht (über die Oberfläche gepflegte)${r.unreadable ? `; ${r.unreadable} sind YAML und wurden nicht geprüft` : ""}.</p>
       ${r.missing.length ? `<p class="sub">Eine Karte wie die Hue-Like-Light-Card zeigt schon bei <b>einer</b> fehlenden Entität nur noch einen Fehler. Wähle je alte ID die Entität, die jetzt gemeint ist. Ersetzt wird nur die ID – Karten und Automationen bleiben sonst unverändert und werden vorher gesichert.</p>
       <div style="max-height:50vh;overflow:auto">${r.missing.map(id => `<div style="padding:8px 0;border-bottom:1px solid var(--line)">
         <code>${esc(id)}</code> <span class="sub">in ${where(id)}</span>
-        <div class="row" style="margin:6px 0 0"><span>→</span><select data-old="${esc(id)}" style="flex:1;min-width:0">${opts(id)}</select>${r.suggestions[id] ? `<span class="sub">aus dem Verlauf</span>` : ""}</div></div>`).join("")}</div>` : ""}
+        <div class="row" style="margin:6px 0 0;align-items:flex-start"><span style="padding-top:7px">→</span><div class="pick" data-old="${esc(id)}">
+          <input type="search" autocomplete="off" spellcheck="false" placeholder="Entität suchen, z. B. lsp02 oder wohnzimmer lampe" value="${esc(label(choices(id).find(c => c.id === chosen[id])))}">
+          <div class="pickres" hidden></div></div>${r.suggestions[id] ? `<span class="sub" style="padding-top:7px">aus dem Verlauf</span>` : ""}</div></div>`).join("")}</div>` : ""}
       <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="again">Erneut prüfen</button>${r.missing.length ? `<button class="btn primary" id="go">Ersetzen</button>` : ""}<button class="btn" id="close">Schließen</button></div>`;
     $("#close", dlg).onclick = close;
     $("#again", dlg).onclick = () => load();
+    // Suchfeld je alter ID: alle Wörter müssen in Name oder Entity-ID vorkommen (Groß/klein, -, _, Umlaute egal)
+    const norm = t => (t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ");
+    dlg.querySelectorAll(".pick").forEach(pk => {
+      const old = pk.dataset.old, inp = $("input", pk), res = $(".pickres", pk), list = choices(old);
+      const pickable = list.map(c => ({c, hay: norm(c.name + " " + c.id)})).sort((a, b) => label(a.c).localeCompare(label(b.c), "de", {numeric: true}));
+      const show = () => {
+        const cur = list.find(c => c.id === chosen[old]), q = inp.value === label(cur) ? "" : inp.value, words = norm(q).split(" ").filter(Boolean);
+        const hits = pickable.filter(x => words.every(w => x.hay.includes(w)));
+        res.innerHTML = hits.slice(0, 40).map(x => `<button type="button" data-id="${esc(x.c.id)}" class="${x.c.id === chosen[old] ? "on" : ""}">${esc(x.c.name || x.c.id)}<span class="sub" style="padding:0">${esc(x.c.id)}</span></button>`).join("")
+          + (hits.length > 40 ? `<span class="sub">… und ${hits.length - 40} weitere – genauer suchen</span>` : hits.length ? "" : `<span class="sub">Keine Entität gefunden</span>`);
+        res.hidden = false;
+      };
+      inp.onfocus = () => { inp.select(); show(); };
+      inp.oninput = () => { if (!inp.value.trim()) delete chosen[old]; show(); };
+      inp.onkeydown = e => { if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); res.hidden = true; } if (e.key === "Enter") { e.preventDefault(); $("button", res)?.click(); } };
+      inp.onblur = () => setTimeout(() => { res.hidden = true; inp.value = label(list.find(c => c.id === chosen[old])); }, 150);
+      res.onpointerdown = e => e.preventDefault(); // Fokus bleibt im Suchfeld, bis gewählt ist
+      res.onclick = e => { const b = e.target.closest("button[data-id]"); if (!b) return; chosen[old] = b.dataset.id; inp.value = label(list.find(c => c.id === b.dataset.id)); res.hidden = true; inp.blur(); };
+    });
     $("#go", dlg) && ($("#go", dlg).onclick = async () => {
-      const mapping = Object.fromEntries([...dlg.querySelectorAll("select[data-old]")].filter(x => x.value).map(x => [x.dataset.old, x.value]));
+      const mapping = Object.fromEntries(Object.entries(chosen).filter(([, v]) => v));
       if (!Object.keys(mapping).length) { toast("Keine Entität gewählt"); return; }
       $("#go", dlg).disabled = true; $("#go", dlg).textContent = "Ersetze …";
       try {
