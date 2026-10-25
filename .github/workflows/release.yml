@@ -1,0 +1,38 @@
+name: Release
+# Steigt die Version in zigbee_devices_manager/config.yaml, entsteht automatisch ein Release vX.Y.Z
+# mit dem passenden Abschnitt aus CHANGELOG.md als Beschreibung und der Demo als Download.
+on:
+  push:
+    branches: [main]
+    paths: ["zigbee_devices_manager/config.yaml"]
+  workflow_dispatch:
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version und Änderungen lesen
+        id: v
+        run: |
+          version=$(python3 -c "import re; print(re.search(r'^version:\s*\"?([^\"\s]+)', open('zigbee_devices_manager/config.yaml').read(), re.M).group(1))")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          python3 - "$version" > notes.md <<'PY'
+          import re, sys
+          text = open("zigbee_devices_manager/CHANGELOG.md", encoding="utf-8").read()
+          m = re.search(r"^## " + re.escape(sys.argv[1]) + r"[ \t]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+          print(m.group(1).strip() if m else "Änderungen: siehe CHANGELOG.md")
+          PY
+          cat notes.md
+      - name: Release anlegen (falls es die Version noch nicht gibt)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION gibt es schon"; exit 0
+          fi
+          python3 scripts/build_demo.py
+          gh release create "v$VERSION" demo/zigbee-devices-manager-demo.html \
+            --title "Version $VERSION" --notes-file notes.md --target "$GITHUB_SHA" --latest

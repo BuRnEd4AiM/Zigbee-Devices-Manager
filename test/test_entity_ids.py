@@ -447,3 +447,223 @@ class RemoveFromScenes(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(server.web.HTTPBadRequest):
             await self.remove(["light.s2_wzel_lsp01"])
         self.assertEqual(self.posted, [])
+
+
+class Reassign(unittest.IsolatedAsyncioTestCase):
+    """Spots neu zuordnen (Namen tauschen) – Matter-Geräte, umbenannt über die Registries von Home Assistant."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = {k: getattr(server, k) for k in ("ha", "safe_backup", "backup_root", "replace_references")}
+        server.backup_root = lambda: Path(self.tmp.name)
+        self.devices = {f"d{n}": {"id": f"d{n}", "name": "KAJPLATS", "name_by_user": f"S2-WZEL-LSP0{n}", "area_id": "wz_s2",
+                                  "identifiers": [["matter", f"deviceid_AB-{n}-MatterNodeDevice"]]} for n in (1, 3, 8)}
+        self.entities = []
+        for n in (1, 3, 8):
+            self.entities += [{"entity_id": f"light.s2_wzel_lsp0{n}", "device_id": f"d{n}", "platform": "matter", "unique_id": f"u{n}", "original_name": None},
+                              {"entity_id": f"button.s2_wzel_lsp0{n}_identify", "device_id": f"d{n}", "platform": "matter", "unique_id": f"b{n}",
+                               "original_name": "Identify", "translation_key": "identify"}]
+        self.calls = []
+
+        async def ha(cmds):
+            out = []
+            for c in cmds:
+                self.calls.append(c)
+                t = c["type"]
+                if t == "config/device_registry/list":
+                    out.append([dict(d) for d in self.devices.values()])
+                elif t == "config/entity_registry/list":
+                    out.append([dict(e) for e in self.entities])
+                elif t == "config/area_registry/list":
+                    out.append([{"area_id": "wz_s2", "name": "Wohnzimmer (S2)"}])
+                elif t == "config/device_registry/update":
+                    self.devices[c["device_id"]].update({k: v for k, v in c.items() if k in ("name_by_user", "area_id")}); out.append({})
+                elif t == "config/entity_registry/update":
+                    e = next(e for e in self.entities if e["entity_id"] == c["entity_id"])
+                    if any(x["entity_id"] == c["new_entity_id"] for x in self.entities):
+                        raise server.web.HTTPBadGateway(text="Entity-ID existiert bereits")
+                    e["entity_id"] = c["new_entity_id"]; out.append({})
+                elif t == "call_service":
+                    out.append({})
+            return out
+
+        async def noop(*a, **k):
+            return None
+
+        async def no_refs(*a, **k):
+            raise AssertionError("Verweise dürfen beim Neu-Zuordnen nicht angefasst werden")
+
+        server.ha, server.safe_backup, server.replace_references = ha, noop, no_refs
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(server, k, v)
+        self.tmp.cleanup()
+
+    async def call(self, handler, body):
+        import json
+
+        class Req:
+            async def json(self):
+                return json.loads(json.dumps(body))
+        return json.loads((await handler(Req())).text)
+
+    def item(self, n, new):
+        return {"device_id": f"d{n}", "name": new, "old_name": f"S2-WZEL-LSP0{n}", "orig_name": "KAJPLATS", "source": "matter", "ieee": ""}
+
+    def owner_of(self, entity_id):
+        return next(e["device_id"] for e in self.entities if e["entity_id"] == entity_id)
+
+    async def test_swap_two_spots(self):
+        res = await self.call(server.reassign, {"items": [self.item(1, "S2-WZEL-LSP08"), self.item(8, "S2-WZEL-LSP01")]})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(self.devices["d1"]["name_by_user"], "S2-WZEL-LSP08")
+        self.assertEqual(self.devices["d8"]["name_by_user"], "S2-WZEL-LSP01")
+        # die IDs wechseln mit dem Namen: light.s2_wzel_lsp01 steuert jetzt das Gerät, das so heißt (d8)
+        self.assertEqual(self.owner_of("light.s2_wzel_lsp01"), "d8")
+        self.assertEqual(self.owner_of("button.s2_wzel_lsp01_identify"), "d8")
+        self.assertEqual(self.owner_of("light.s2_wzel_lsp08"), "d1")
+        self.assertFalse(any("tausch" in e["entity_id"] for e in self.entities))
+        self.assertEqual(self.devices["d3"]["name_by_user"], "S2-WZEL-LSP03")  # unbeteiligt
+        self.assertIn({"old": "light.s2_wzel_lsp01", "new": "light.s2_wzel_lsp08"}, res["renamed_entities"])
+
+    async def test_ring_of_three(self):
+        res = await self.call(server.reassign, {"items": [self.item(1, "S2-WZEL-LSP03"), self.item(3, "S2-WZEL-LSP08"), self.item(8, "S2-WZEL-LSP01")]})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual([self.devices[d]["name_by_user"] for d in ("d1", "d3", "d8")], ["S2-WZEL-LSP03", "S2-WZEL-LSP08", "S2-WZEL-LSP01"])
+        self.assertEqual([self.owner_of(f"light.s2_wzel_lsp0{n}") for n in (1, 3, 8)], ["d8", "d1", "d3"])
+
+    async def test_must_be_a_permutation(self):
+        with self.assertRaises(server.web.HTTPBadRequest):
+            await self.call(server.reassign, {"items": [self.item(1, "S2-WZEL-LSP08"), self.item(8, "S2-WZEL-LSP08")]})
+        with self.assertRaises(server.web.HTTPBadRequest):
+            await self.call(server.reassign, {"items": [self.item(1, "S2-WZEL-LSP99"), self.item(8, "S2-WZEL-LSP01")]})
+
+    async def test_outdated_list_is_refused(self):
+        self.devices["d8"]["name_by_user"] = "Anders"
+        with self.assertRaises(server.web.HTTPConflict):
+            await self.call(server.reassign, {"items": [self.item(1, "S2-WZEL-LSP08"), self.item(8, "S2-WZEL-LSP01")]})
+        self.assertEqual(self.devices["d1"]["name_by_user"], "S2-WZEL-LSP01")
+
+    async def test_plan_treats_swapped_ids_as_free(self):
+        res = await self.call(server.reassign_plan, {"items": [self.item(1, "S2-WZEL-LSP08"), self.item(8, "S2-WZEL-LSP01")]})
+        self.assertEqual(res["skipped"], [])
+        self.assertIn({"old": "light.s2_wzel_lsp01", "new": "light.s2_wzel_lsp08", "device_id": "d1"}, res["entities"])
+
+    async def test_identify_presses_button(self):
+        res = await self.call(server.identify, {"device_id": "d3", "source": "matter"})
+        self.assertEqual(res["entity_id"], "button.s2_wzel_lsp03_identify")
+        self.assertIn({"type": "call_service", "domain": "button", "service": "press", "target": {"entity_id": "button.s2_wzel_lsp03_identify"}}, self.calls)
+
+
+class ReassignMixed(unittest.IsolatedAsyncioTestCase):
+    """Neu zuordnen zwischen einem Matter-Spot und einem Zigbee2MQTT-Spot (Z2M nachgestellt: Umbenennen samt Entity-IDs)."""
+    IEEE = "0x000d6ffffe123456"
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = {k: getattr(server, k) for k in ("ha", "safe_backup", "backup_root", "replace_references", "z2m_devices", "z2m_request", "collect_usages")}
+        server.backup_root = lambda: Path(self.tmp.name)
+        self.devices = {
+            "m1": {"id": "m1", "name": "KAJPLATS", "name_by_user": "S2-WZEL-LSP01", "area_id": "wz", "identifiers": [["matter", "deviceid_AB-1-MatterNodeDevice"]]},
+            "z8": {"id": "z8", "name": "S2-WZEL-LSP08", "name_by_user": None, "area_id": "wz", "identifiers": [["mqtt", f"zigbee2mqtt_{self.IEEE}"]]}}
+        uid = lambda p: f"{self.IEEE}_{p}_zigbee2mqtt"  # noqa: E731
+        self.entities = [
+            {"entity_id": "light.s2_wzel_lsp01", "device_id": "m1", "platform": "matter", "unique_id": "m-light", "original_name": None},
+            {"entity_id": "button.s2_wzel_lsp01_identify", "device_id": "m1", "platform": "matter", "unique_id": "m-id", "original_name": "Identify"},
+            {"entity_id": "light.s2_wzel_lsp08", "device_id": "z8", "platform": "mqtt", "unique_id": uid("light"), "original_name": None},
+            {"entity_id": "sensor.s2_wzel_lsp08_linkquality", "device_id": "z8", "platform": "mqtt", "unique_id": uid("linkquality"), "original_name": "Linkquality"},
+            {"entity_id": "select.s2_wzel_lsp08_power_on_behavior", "device_id": "z8", "platform": "mqtt", "unique_id": uid("power_on_behavior"),
+             "original_name": "Power-on behavior"}]
+        self.z2m_name = "S2-WZEL-LSP08"
+
+        async def ha(cmds):
+            out = []
+            for c in cmds:
+                t = c["type"]
+                if t == "config/device_registry/list":
+                    out.append([dict(d) for d in self.devices.values()])
+                elif t == "config/entity_registry/list":
+                    out.append([dict(e) for e in self.entities])
+                elif t == "config/area_registry/list":
+                    out.append([{"area_id": "wz", "name": "Wohnzimmer (S2)"}])
+                elif t == "config/device_registry/update":
+                    self.devices[c["device_id"]].update({k: v for k, v in c.items() if k in ("name_by_user", "area_id")}); out.append({})
+                elif t == "config/entity_registry/update":
+                    if any(x["entity_id"] == c["new_entity_id"] for x in self.entities):
+                        raise server.web.HTTPBadGateway(text="Entity-ID existiert bereits")
+                    next(e for e in self.entities if e["entity_id"] == c["entity_id"])["entity_id"] = c["new_entity_id"]; out.append({})
+                else:
+                    out.append({})
+            return out
+
+        async def z2m_devices():
+            return {self.IEEE: {"base": "zigbee2mqtt", "name": self.z2m_name}}
+
+        async def z2m_request(base, action, payload, timeout=12):
+            # wie Zigbee2MQTT: neuer Friendly-Name, HA-Gerät folgt; mit homeassistant_rename neue Entity-IDs aus dem Namen
+            assert action == "device/rename" and payload["from"] == self.IEEE
+            self.z2m_name = payload["to"]
+            self.devices["z8"]["name"] = payload["to"]
+            if payload.get("homeassistant_rename"):
+                for e in self.entities:
+                    if e["device_id"] != "z8":
+                        continue
+                    dom = e["entity_id"].partition(".")[0]
+                    prop = e["unique_id"][len(self.IEEE) + 1:-len("_zigbee2mqtt")]
+                    suffix = "" if prop == dom else "_" + prop
+                    new = f"{dom}.{server.slugify(payload['to'])}{suffix}"
+                    e["entity_id"] = new + "_2" if any(x["entity_id"] == new for x in self.entities if x is not e) else new
+            return {"status": "ok"}
+
+        async def noop(*a, **k):
+            return None
+
+        async def usages(body, mapping):
+            used = [i for i in mapping if i == "button.s2_wzel_lsp01_identify"]
+            return ([{"kind": "scene", "id": "s", "title": "Abends", "entities": used}] if used else []), 0, []
+
+        async def no_refs(*a, **k):
+            raise AssertionError("Verweise dürfen beim Neu-Zuordnen nicht angefasst werden")
+
+        server.ha, server.safe_backup, server.replace_references = ha, noop, no_refs
+        server.z2m_devices, server.z2m_request, server.collect_usages = z2m_devices, z2m_request, usages
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(server, k, v)
+        self.tmp.cleanup()
+
+    async def call(self, handler, body):
+        import json
+
+        class Req:
+            async def json(self):
+                return json.loads(json.dumps(body))
+        return json.loads((await handler(Req())).text)
+
+    def items(self):
+        return [{"device_id": "m1", "name": "S2-WZEL-LSP08", "old_name": "S2-WZEL-LSP01", "orig_name": "KAJPLATS", "source": "matter", "ieee": ""},
+                {"device_id": "z8", "name": "S2-WZEL-LSP01", "old_name": "S2-WZEL-LSP08", "orig_name": "S2-WZEL-LSP08", "source": "z2m",
+                 "ieee": self.IEEE, "base_topic": "zigbee2mqtt"}]
+
+    def ids_of(self, dev):
+        return sorted(e["entity_id"] for e in self.entities if e["device_id"] == dev)
+
+    async def test_swap_matter_with_zigbee2mqtt(self):
+        res = await self.call(server.reassign, {"items": self.items(), "rename_z2m": True})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(self.devices["m1"]["name_by_user"], "S2-WZEL-LSP08")
+        self.assertEqual((self.devices["z8"]["name_by_user"] or self.devices["z8"]["name"], self.z2m_name), ("S2-WZEL-LSP01", "S2-WZEL-LSP01"))
+        self.assertEqual(self.ids_of("m1"), ["button.s2_wzel_lsp08_identify", "light.s2_wzel_lsp08"])
+        self.assertEqual(self.ids_of("z8"), ["light.s2_wzel_lsp01", "select.s2_wzel_lsp01_power_on_behavior", "sensor.s2_wzel_lsp01_linkquality"])
+        self.assertEqual([c["status"] for c in res["checks"] if c["name"] == "Entity-IDs"], ["ok"])
+
+    async def test_plan_warns_about_ids_the_other_device_lacks(self):
+        res = await self.call(server.reassign_plan, {"items": self.items()})
+        lost = {x["id"]: x["used_in"] for x in res["lost"]}
+        # der Zigbee-Spot hat keinen Identifizieren-Knopf, der Matter-Spot keine Linkqualität/Einschaltverhalten
+        self.assertEqual(sorted(lost), ["button.s2_wzel_lsp01_identify", "select.s2_wzel_lsp08_power_on_behavior", "sensor.s2_wzel_lsp08_linkquality"])
+        self.assertEqual(lost["button.s2_wzel_lsp01_identify"], ["Szene „Abends“"])

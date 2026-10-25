@@ -1699,7 +1699,11 @@ async def verify_delete_request(request):
 
 
 async def apply(request):
-    body = await request.json()
+    return web.json_response(await run_apply(await request.json()))
+
+
+async def run_apply(body):
+    """Benennt Geräte um (Zigbee2MQTT bzw. HA), zieht Entity-IDs, Verweise und Bereiche nach und prüft das Ergebnis."""
     items = parse_request(body)
     if not items:
         raise web.HTTPBadRequest(text="Keine Geräte angegeben")
@@ -1711,8 +1715,9 @@ async def apply(request):
     errors, done = [], []
     pid = body.get("progress_id")
     prog_start(pid, len(items) * 2 + 4)
-    prog(pid, "Sichere den aktuellen Stand …", 0)
-    await safe_backup("vor-umbenennen")
+    if not body.get("skip_backup"):
+        prog(pid, "Sichere den aktuellen Stand …", 0)
+        await safe_backup("vor-umbenennen")
     prog(pid, "Lese Entitäten …", 0)
     entities, devices, areas = await entity_registries() if z2m_mode else ([], [], [])
     changes, skipped, _info = entity_changes(items, entities, devices, areas) if z2m_mode else ([], [], [])
@@ -1813,10 +1818,150 @@ async def apply(request):
         checks = [c for c in checks if not (c["name"] == "Entity-IDs" and c["status"] == "info")]
         checks.insert(0, check("Entity-IDs", "fail", "Nicht umbenannt: " + ", ".join(f"{c['old']} → {c['new']}" for c in missed)))
     prog_end(pid)
-    return web.json_response({"ok": not errors, "checks": checks, "renamed_devices": done, "renamed_entities": renamed,
-                              "skipped": skipped, "updated_references": changed_refs,
-                              "unreadable": unreadable, "notes": notes, "errors": errors,
-                              "items": items, "areas_set": sum(1 for t in targets.values() if t["id"])})
+    return {"ok": not errors, "checks": checks, "renamed_devices": done, "renamed_entities": renamed,
+            "skipped": skipped, "updated_references": changed_refs,
+            "unreadable": unreadable, "notes": notes, "errors": errors,
+            "items": items, "areas_set": sum(1 for t in targets.values() if t["id"])}
+
+
+# ---------- Blinken und Neu-Zuordnen (Namen tauschen, z. B. vertauscht eingebaute Spots) ----------
+def identify_button(entities):
+    """Identifizieren-Knopf eines Geräts (Matter/ZHA legen button.<name>_identify an), nur wenn nicht deaktiviert."""
+    return next((e["entity_id"] for e in entities if e["entity_id"].startswith("button.") and not e.get("disabled_by")
+                 and (e.get("translation_key") == "identify" or e["entity_id"].endswith("_identify")
+                      or (e.get("original_name") or "").lower() in ("identify", "identifizieren"))), None)
+
+
+async def identify(request):
+    """Lässt ein Gerät blinken: Identifizieren-Knopf (Matter, ZHA), bei Zigbee2MQTT der Effekt „blink“ (ändert den Zustand
+    nicht), sonst kurzes Aufblinken einer Lampe über Home Assistant."""
+    body = await request.json()
+    device_id = body.get("device_id")
+    entities = [e for e in (await ha([{"type": "config/entity_registry/list"}]))[0] if e.get("device_id") == device_id and device_id]
+    if not entities:
+        raise web.HTTPNotFound(text="Keine Entitäten zu diesem Gerät gefunden")
+    if btn := identify_button(entities):
+        ok, res = await ha_try({"type": "call_service", "domain": "button", "service": "press", "target": {"entity_id": btn}})
+        if ok:
+            return web.json_response({"ok": True, "how": "Identifizieren", "entity_id": btn})
+    if body.get("source") == "z2m" and body.get("ieee"):
+        owner = (await z2m_devices()).get(body["ieee"].lower())
+        base = owner["base"] if owner else safe_topic(body.get("base_topic"))
+        target = (owner or {}).get("name") or body["ieee"]
+        ok, res = await ha_try({"type": "call_service", "domain": "mqtt", "service": "publish",
+                                "service_data": {"topic": f"{base}/{target}/set", "payload": json.dumps({"effect": "blink"})}})
+        if ok:
+            return web.json_response({"ok": True, "how": "Blink-Effekt (Zigbee2MQTT)"})
+    light = next((e["entity_id"] for e in entities if e["entity_id"].startswith("light.") and not e.get("disabled_by")), None)
+    if light:
+        ok, res = await ha_try({"type": "call_service", "domain": "light", "service": "turn_on", "target": {"entity_id": light},
+                                "service_data": {"flash": "long"}})
+        if ok:
+            return web.json_response({"ok": True, "how": "Aufblinken", "entity_id": light})
+    raise web.HTTPBadRequest(text="Dieses Gerät kann nicht blinken (kein Identifizieren-Knopf, keine Lampe)")
+
+
+def reassign_items(body):
+    """Geräte, deren Name sich ändert. Die neuen Namen müssen genau die bisherigen Namen der ausgewählten Geräte sein
+    (Tausch bzw. Ringtausch) – sonst entstünden doppelte oder verlorene Namen."""
+    items = parse_request(body)
+    for it in items:
+        it["old_name"] = (it.get("old_name") or "").strip()
+    if sorted(it["name"] for it in items) != sorted(it["old_name"] for it in items) or len({it["name"] for it in items}) != len(items):
+        raise web.HTTPBadRequest(text="Die neuen Namen müssen genau die bisherigen Namen der ausgewählten Geräte sein (jeder einmal)")
+    return [it for it in items if it["name"] != it["old_name"]]
+
+
+async def reassign_plan(request):
+    """Vorschau zum Neu-Zuordnen: Entity-IDs je Gerät (alt → neu) und Bereiche. Die IDs der anderen getauschten Geräte gelten
+    als frei – sie wechseln ja ebenfalls."""
+    items = reassign_items(await request.json())
+    entities, devices, areas = await entity_registries()
+    moving = {it["device_id"] for it in items}
+    changes, skipped = [], []
+    for it in items:
+        others = [e for e in entities if e.get("device_id") not in moving or e.get("device_id") == it["device_id"]]
+        c, s, _ = entity_changes([it], others, devices, areas)
+        changes += c
+        skipped += s
+    # IDs, die es danach nicht mehr gibt, weil das andere Gerät sie nicht hat (z. B. Matter ↔ Zigbee: button.…_identify gegen
+    # select.…_power_on_behavior) – wer sie nutzt, zeigt danach ins Leere
+    before = {e["entity_id"] for e in entities if e.get("device_id") in moving}
+    lost = sorted(before - ({c["new"] for c in changes} | (before - {c["old"] for c in changes})))
+    usages, _, _ = await collect_usages({"update_references": True}, {i: i for i in lost}) if lost else ([], 0, [])
+    used = lambda i: [f"{KIND_NAMES.get(u['kind'], u['kind'])} „{u['title']}“" for u in usages if i in u["entities"]]  # noqa: E731
+    return web.json_response({"entities": changes, "skipped": skipped, "lost": [{"id": i, "used_in": used(i)} for i in lost],
+                              "areas": [{"device": it["old_name"], "from": it.get("current_area") or "", "to": it.get("area_name") or ""}
+                                        for it in items if it.get("area_id") and it.get("area_id") != it.get("current_area_id")]})
+
+
+async def reassign(request):
+    """Ordnet Geräte neu zu (Namen tauschen): erst alle auf Zwischennamen, dann auf ihren neuen Namen – so kollidiert nichts.
+    Gerätename, Zigbee2MQTT-Name, Entity-IDs und (falls gewählt) Bereich folgen dem Namen. Automationen, Szenen und Dashboards
+    bleiben unverändert: Sie nennen IDs, die danach zum Gerät gehören, das jetzt so heißt (also am richtigen Platz hängt).
+    Schlägt der erste Schritt fehl, werden die Zwischennamen zurückgenommen."""
+    body = await request.json()
+    items = reassign_items(body)
+    if not items:
+        raise web.HTTPBadRequest(text="Kein Gerät bekommt einen anderen Namen")
+    pid = body.get("progress_id")
+    prog_start(pid, 4)
+    prog(pid, "Sichere den aktuellen Stand …", 0)
+    await safe_backup("vor-tauschen")
+    registry = {d["id"]: d.get("name_by_user") or d.get("name") or "" for d in (await ha([{"type": "config/device_registry/list"}]))[0]}
+    stale = [it["old_name"] for it in items if registry.get(it["device_id"]) != it["old_name"]]
+    if stale:
+        prog_end(pid)
+        raise web.HTTPConflict(text=f"Die Liste ist nicht mehr aktuell ({', '.join(stale)} heißt in Home Assistant inzwischen anders) – bitte neu laden")
+    taken = {n.lower() for n in registry.values()}
+    temp = {}
+    for it in items:
+        name, n = f"{it['old_name']}-tausch", 1
+        while name.lower() in taken:
+            n += 1
+            name = f"{it['old_name']}-tausch{n}"
+        taken.add(name.lower())
+        temp[it["device_id"]] = name
+    common = {"rename_entities": True, "rename_z2m": body.get("rename_z2m", True), "update_references": False, "update_yaml": False,
+              "update_nodered": False, "skip_backup": True, "skip_verify": True}
+    step = lambda its, **kw: run_apply({**common, **kw, "items": its})  # noqa: E731
+    prog(pid, "Schritt 1/2: Zwischennamen vergeben …")
+    first = await step([{**it, "name": temp[it["device_id"]], "area_id": "", "area_name": ""} for it in items], set_area=False)
+    errors = list(first["errors"])
+    if errors:
+        back = [{**it, "name": it["old_name"], "old_name": temp[it["device_id"]], "area_id": "", "area_name": ""}
+                for it in items if it["device_id"] in first["renamed_devices"]]
+        if back:
+            prog(pid, "Fehler – nehme die Zwischennamen zurück …")
+            errors += (await step(back, set_area=False))["errors"]
+        prog_end(pid)
+        return web.json_response({"ok": False, "errors": errors, "checks": [check("Neu zuordnen", "fail", "Abgebrochen – Namen sind unverändert")]})
+    prog(pid, "Schritt 2/2: neue Namen vergeben …")
+    final = [{**it, "old_name": temp[it["device_id"]]} for it in items]
+    second = await step(final, set_area=bool(body.get("set_area")))
+    errors += second["errors"]
+    retry = [it for it in final if it["device_id"] not in second["renamed_devices"]]
+    if retry:  # einmal nachfassen (z. B. Zigbee2MQTT hat nicht rechtzeitig geantwortet)
+        again = await step(retry, set_area=bool(body.get("set_area")))
+        second["renamed_devices"] += again["renamed_devices"]
+        second["renamed_entities"] += again["renamed_entities"]
+        errors += again["errors"]
+    prog(pid, "Prüfe das Ergebnis …")
+    final_of = {c["old"]: c["new"] for c in second["renamed_entities"]}  # Zwischen-ID → endgültige ID
+    renamed = sorted(({"old": c["old"], "new": final_of.get(c["new"], c["new"])} for c in first["renamed_entities"]), key=lambda c: c["old"])
+    stuck = [it for it in final if it["device_id"] not in second["renamed_devices"]]
+    checks = await verify_changes([it for it in items if it not in stuck], [], {"rename_z2m": common["rename_z2m"], "set_area": body.get("set_area")})
+    entities, devices, areas = await entity_registries()
+    left, _, _ = entity_changes([{**it, "old_name": it["name"]} for it in items], entities, devices, areas)
+    checks.append(check("Entity-IDs", "warn" if left else "ok", f"Passen noch nicht zum neuen Namen: {', '.join(c['old'] for c in left)}" if left
+                        else f"{len(renamed)} Entity-ID(s) gehören jetzt zum neuen Namen"))
+    if stuck:
+        checks.insert(0, check("Neu zuordnen", "fail", "Noch mit Zwischennamen: " + ", ".join(f"{it['old_name']} (soll heißen: {it['name']})" for it in stuck)
+                               + " – in der Liste den Namen anklicken und richtig eintragen"))
+    checks.append(check("Verweise", "info", "Automationen, Szenen und Dashboards sind unverändert – sie steuern jetzt das Gerät, das so heißt"))
+    prog_end(pid)
+    return web.json_response({"ok": not errors and not stuck, "errors": errors, "checks": checks, "renamed_entities": renamed,
+                              "done": [it["device_id"] for it in items if it not in stuck]})
 
 
 async def index(request):
@@ -1889,6 +2034,9 @@ def make_app():
         web.get("/api/references", check_references),
         web.post("/api/references/repair", repair_references),
         web.post("/api/references/remove_from_scenes", remove_from_scenes),
+        web.post("/api/identify", identify),
+        web.post("/api/reassign/plan", reassign_plan),
+        web.post("/api/reassign", reassign),
         web.post("/api/entities/info", entity_info),
         web.post("/api/entities/dedupe", dedupe_entities),
         web.get("/api/progress", progress),
