@@ -1,7 +1,7 @@
-name: Zigbee Devices Manager
-version: "0.16.0"
+name: Gerätemanager
+version: "0.17.0"
 slug: zigbee_devices_manager
-description: Geräte-Namen für Zigbee- und Matter-Geräte zentral verwalten – mit Namensschema, Kürzeln und automatischem Hochzählen.
+description: Alle Geräte aus Home Assistant zentral benennen – Zigbee, Matter, Shelly und jede andere Integration – mit Namensschema, Kürzeln und automatischem Hochzählen.
 url: https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager
 arch:
   - amd64
@@ -12,8 +12,8 @@ startup: application
 boot: auto
 ingress: true
 ingress_port: 8099
-panel_icon: mdi:zigbee
-panel_title: Zigbee Namen
+panel_icon: mdi:tag-multiple
+panel_title: Gerätemanager
 panel_admin: true
 homeassistant_api: true
 # nur lesend: findet die Oberfläche (Ingress) der Zigbee2MQTT-Add-ons für den Knopf „ⓘ Z2M“

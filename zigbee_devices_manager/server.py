@@ -1,4 +1,4 @@
-"""Backend des Zigbee Devices Manager (Home Assistant Add-on, Ingress)."""
+"""Backend des Gerätemanagers (Home Assistant Add-on, Ingress)."""
 import asyncio
 import hashlib
 import json
@@ -133,9 +133,18 @@ def write_json(path, data):
     os.replace(tmp, path)
 
 
-def collect_devices(devices, areas):
-    """Zigbee-Geräte (ZHA und Zigbee2MQTT), Matter-Geräte (Thread/WLAN) und ihre Gateways aus der Geräte-Registry."""
+def integration_of(device, entry_domains):
+    """Integration (Domäne, z. B. shelly) eines Geräts: über seinen (primären) Konfigurationseintrag, sonst die erste Kennung."""
+    entry = device.get("primary_config_entry") or next(iter(device.get("config_entries") or []), None)
+    return entry_domains.get(entry) or next((dom for dom, _ in device.get("identifiers") or []), "") or "sonstige"
+
+
+def collect_devices(devices, areas, entry_domains=None, integration_names=None):
+    """Alle Geräte aus der Geräte-Registry und ihre Gateways. Zigbee (ZHA, Zigbee2MQTT) und Matter (Thread/WLAN) mit IEEE bzw.
+    Node-ID und eigenem Gateway; alle übrigen (Shelly, ESPHome …) gruppiert nach ihrer Integration. Dienste (z. B. Sonne,
+    Wettervorhersage) sind mit "service" markiert, die Oberfläche blendet sie standardmäßig aus."""
     area_names = {a["area_id"]: a["name"] for a in areas}
+    entry_domains, integration_names = entry_domains or {}, integration_names or {}
     out, bridges = [], {}
     for d in devices:
         if any(dom == "mqtt" and ident.startswith("zigbee2mqtt_bridge_") for dom, ident in d.get("identifiers", [])):
@@ -143,20 +152,19 @@ def collect_devices(devices, areas):
             bridges[d["id"]] = {"id": d["id"], "source": "z2m", "name": d.get("name_by_user") or d.get("name") or "Zigbee2MQTT",
                                 "ieee": ident.removeprefix("zigbee2mqtt_bridge_"), "config_url": d.get("configuration_url") or ""}
             continue
-        found = device_source(d)
-        if not found:
-            continue
-        source, ident = found
-        matter = source == "matter"
-        ieee = "" if matter else ident
-        # Matter: ein gemeinsames Gateway – auch für Geräte hinter einer Matter-Bridge (deren via_device ist die Bridge selbst)
-        bridge = "matter" if matter else d.get("via_device_id") or source
+        source, ident = device_source(d) or (integration_of(d, entry_domains), "")
+        matter, zigbee = source == "matter", source in ("zha", "z2m")
+        ieee = ident if zigbee else ""
+        # Matter: ein gemeinsames Gateway – auch für Geräte hinter einer Matter-Bridge (deren via_device ist die Bridge selbst);
+        # andere Integrationen: ein Gateway je Integration
+        bridge = "matter" if matter else (d.get("via_device_id") or source) if zigbee else source
+        source_name = SOURCE_NAMES.get(source) or integration_names.get(source) or source.replace("_", " ").title()
         if bridge not in bridges:
-            bridges.setdefault(bridge, {"id": bridge, "source": source, "name": SOURCE_NAMES[source]})
+            bridges.setdefault(bridge, {"id": bridge, "source": source, "name": source_name})
         out.append({
             "bridge": bridge,
             "id": d["id"],
-            "name": d.get("name_by_user") or d.get("name") or ident,
+            "name": d.get("name_by_user") or d.get("name") or ident or d.get("model") or d["id"],
             "orig_name": d.get("name") or "",
             # Z2M liefert den Friendly-Name als Gerätenamen; neu ist ein Z2M-Gerät nur, solange es noch seine IEEE als Namen trägt
             "is_new": not d.get("name_by_user") and (source != "z2m" or (d.get("name") or "").lower() in ("", ieee.lower())),
@@ -164,14 +172,33 @@ def collect_devices(devices, areas):
             "model": d.get("model") or "",
             "ieee": ieee,
             "source": source,
+            "source_name": source_name,
             "area": area_names.get(d.get("area_id"), ""),
             "area_id": d.get("area_id") or "",
             # Link zur Geräteseite in der Z2M-Oberfläche – setzt Zigbee2MQTT selbst, wenn dort frontend.url eingetragen ist
             "config_url": d.get("configuration_url") or "",
+            "service": d.get("entry_type") == "service",
+            "disabled": bool(d.get("disabled_by")),
         })
         if matter:
             out[-1]["node"], out[-1]["endpoint"] = matter_node(ident)
+        elif not zigbee:  # Kennung für WLAN-/LAN-Geräte, z. B. Shelly
+            out[-1]["mac"] = next((v for kind, v in d.get("connections") or [] if kind == "mac"), "")
     return out, bridges
+
+
+async def integrations():
+    """Konfigurationseintrag → Integration (Domäne) und Domäne → Anzeigename („Shelly“, „ESPHome“). Optional: ohne sie
+    zählen die Geräte zur Integration ihrer ersten Kennung und tragen die Domäne als Namen."""
+    ok, entries = await ha_try({"type": "config_entries/get"})
+    entry_domains = {e["entry_id"]: e["domain"] for e in entries} if ok else {}
+    ok, manifests = await ha_try({"type": "manifest/list"})  # nur geladene Integrationen – eine fehlende ließe die Liste scheitern
+    return entry_domains, {m["domain"]: m.get("name") or m["domain"] for m in manifests} if ok else {}
+
+
+def bridge_order(b):
+    """Zigbee- und Matter-Gateways zuerst, dann die übrigen Integrationen alphabetisch."""
+    return b["source"] not in SOURCE_NAMES, b["name"].lower()
 
 
 async def get_state(request):
@@ -182,7 +209,7 @@ async def get_state(request):
     ok, floors = await ha_try({"type": "config/floor_registry/list"})  # ältere HA-Versionen kennen keine Etagen
     if not ok:
         floors = []
-    out, bridges = collect_devices(devices, areas)
+    out, bridges = collect_devices(devices, areas, *await integrations())
     ok, entities = await ha_try({"type": "config/entity_registry/list"})
     if ok:
         mark_stale_ids(out, entities, devices, areas)
@@ -192,7 +219,7 @@ async def get_state(request):
     return web.json_response({"devices": out, "store": load_store(), "restored": restored or None,
                               "areas": [{"id": a["area_id"], "name": a["name"], "floor_id": a.get("floor_id") or ""} for a in areas],
                               "floors": [{"id": f["floor_id"], "name": f["name"], "level": f.get("level")} for f in floors],
-                              "bridges": [b for b in bridges.values() if b["id"] in used or b["source"] == "z2m"]})
+                              "bridges": sorted((b for b in bridges.values() if b["id"] in used or b["source"] == "z2m"), key=bridge_order)})
 
 
 PROGRESS = {}
@@ -487,8 +514,8 @@ def valid_store(data):
 
 async def snapshot_devices():
     devices, areas = await ha([{"type": "config/device_registry/list"}, {"type": "config/area_registry/list"}])
-    out, _ = collect_devices(devices, areas)
-    keys = ("id", "ieee", "source", "name", "area", "manufacturer", "model")
+    out, _ = collect_devices(devices, areas, *await integrations())
+    keys = ("id", "ieee", "source", "source_name", "name", "area", "manufacturer", "model")
     return [{k: d[k] for k in keys} for d in out]
 
 
@@ -1539,7 +1566,8 @@ async def ha_try(cmd):
 
 # ---------- Löschen ----------
 async def delete_targets(items):
-    """Entity-IDs je Gerät und die Geräte, die über ein Gerät angebunden sind (via_device: ZHA-Koordinator, Matter-Bridge)."""
+    """Entity-IDs je Gerät, die Geräte, die über ein Gerät angebunden sind (via_device: ZHA-Koordinator, Matter-Bridge),
+    und die Quelle je Gerät laut Geräte-Registry (zha, z2m, matter; None bei anderen Integrationen)."""
     devices, entities = await ha([{"type": "config/device_registry/list"}, {"type": "config/entity_registry/list"}])
     ids = {it["device_id"] for it in items}
     ents, children = {}, {}
@@ -1549,7 +1577,8 @@ async def delete_targets(items):
     for d in devices:
         if d.get("via_device_id") in ids:
             children.setdefault(d["via_device_id"], []).append(d.get("name_by_user") or d.get("name") or d["id"])
-    return ents, children
+    sources = {d["id"]: (device_source(d) or (None,))[0] for d in devices if d["id"] in ids}
+    return ents, children, sources
 
 
 def is_coordinator(it, children):
@@ -1557,14 +1586,27 @@ def is_coordinator(it, children):
     return it.get("source") == "zha" and bool(children.get(it["device_id"]))
 
 
+def delete_blocked(it, children, sources):
+    """Grund, warum ein Gerät nicht gelöscht wird ("" = wird gelöscht). Restlos löschen (aus dem Netz abmelden) kann das Add-on
+    nur Zigbee- und Matter-Geräte; bei anderen Integrationen bliebe der Eintrag der Integration und das Gerät käme wieder."""
+    if it["device_id"] not in sources:
+        return "Nicht mehr in Home Assistant vorhanden"
+    if sources[it["device_id"]] is None:
+        return "Gerät einer anderen Integration – das Add-on löscht nur Zigbee- und Matter-Geräte. In Home Assistant bei der Integration entfernen."
+    if is_coordinator({**it, "source": sources[it["device_id"]]}, children):
+        return "ZHA-Koordinator – wird nicht gelöscht"
+    return ""
+
+
 async def plan_delete(request):
     """Vorschau zum Löschen: Entitäten je Gerät, angebundene Geräte und Automationen/Skripte/Szenen/Dashboards, die die Entitäten nutzen."""
     items = parse_request(await request.json())
-    ents, children = await delete_targets(items)
-    ids = [e for it in items for e in ents.get(it["device_id"], [])]
+    ents, children, sources = await delete_targets(items)
+    blocked = {it["device_id"]: delete_blocked(it, children, sources) for it in items}
+    ids = [e for it in items if not blocked[it["device_id"]] for e in ents.get(it["device_id"], [])]
     usages, unreadable, _ = await collect_usages({"update_references": True}, {e: e for e in ids}) if ids else ([], 0, [])
     return web.json_response({"devices": [{"device_id": it["device_id"], "name": it["name"], "entities": ents.get(it["device_id"], []),
-                                           "children": children.get(it["device_id"], []), "blocked": is_coordinator(it, children)}
+                                           "children": children.get(it["device_id"], []), "blocked": blocked[it["device_id"]]}
                                           for it in items],
                               "usages": usages, "unreadable": unreadable})
 
@@ -1667,14 +1709,15 @@ async def delete_devices(request):
     prog_start(pid, len(items) + 3)
     prog(pid, "Sichere den aktuellen Stand …", 0)
     await safe_backup("vor-loeschen")
-    _, children = await delete_targets(items)
+    _, children, sources = await delete_targets(items)
     owners = await z2m_devices() if any(it.get("source") == "z2m" for it in items) else {}
     errors, removed, forced = [], [], []
     for n, it in enumerate(items, 1):
         prog(pid, f"Entferne ({n}/{len(items)}): {it['name']}", 0)
-        if is_coordinator(it, children):
-            errors.append({"device": it["name"], "device_id": it["device_id"], "error": "ZHA-Koordinator – wird nicht gelöscht"})
+        if reason := delete_blocked(it, children, sources):
+            errors.append({"device": it["name"], "device_id": it["device_id"], "error": reason})
             continue
+        it["source"] = sources[it["device_id"]]  # maßgeblich ist die Registry, nicht die Angabe der Oberfläche
         ok, failure, was_forced = await remove_in_bridge(it, owners, bool(body.get("force")))
         if ok:
             removed.append(it)
@@ -1994,6 +2037,7 @@ async def diag(request):
                 sources = [s[0] for d in res if (s := device_source(d))]
                 out["zigbee_devices"] = sum(1 for s in sources if s != "matter")
                 out["matter_devices"] = sources.count("matter")
+                out["other_devices"] = len(res) - len(sources)
         except web.HTTPException as err:
             out["steps"].append({"step": name, "ok": False, "error": err.text})
     out["config_dir"] = {"path": str(HA_CONFIG_DIR), "exists": HA_CONFIG_DIR.is_dir()}
@@ -2006,8 +2050,8 @@ async def selftest(app):
     class Dummy:  # nur für den Aufruf der Diagnose
         pass
     result = json.loads((await diag(Dummy())).text)
-    log.info("Start: Token=%s, Zigbee-Geräte=%s, Matter-Geräte=%s, Schritte=%s", result["supervisor_token"],
-             result.get("zigbee_devices"), result.get("matter_devices"), result["steps"])
+    log.info("Start: Token=%s, Zigbee-Geräte=%s, Matter-Geräte=%s, weitere Geräte=%s, Schritte=%s", result["supervisor_token"],
+             result.get("zigbee_devices"), result.get("matter_devices"), result.get("other_devices"), result["steps"])
 
 
 def make_app():
