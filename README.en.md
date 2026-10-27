@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="zigbee_devices_manager/logo.png" alt="Zigbee Devices Manager" width="128">
+  <img src="zigbee_devices_manager/logo.png" alt="Gerätemanager (Device Manager)" width="128">
 </p>
 
-<h1 align="center">Zigbee Devices Manager</h1>
+<h1 align="center">Gerätemanager (Device Manager)</h1>
 
 <p align="center">
-  Home Assistant add-on that names Zigbee and Matter devices after a fixed naming scheme –<br>
-  including entity IDs, rooms, automations, scenes and dashboards.
+  Home Assistant add-on that names all devices – Zigbee, Matter, Shelly and any other integration – after a fixed naming scheme,<br>
+  including entity IDs, rooms, automations, scenes and dashboards. (Formerly “Zigbee Devices Manager”.)
 </p>
 
 <p align="center">
@@ -32,7 +32,7 @@
 
 - 🏷️ **A naming scheme instead of chaos** – e.g. `{house}{floor}-{room}-{type}{nr}` → `S2-WZEL-LSP03`, with abbreviations, automatic counting and free numbers.
 - 🔗 **Everything follows** – device name in Zigbee2MQTT or Home Assistant, entity IDs, room as HA area and references in automations, scripts, scenes, dashboards, YAML and Node-RED. Preview first, verification afterwards.
-- 📡 **Zigbee2MQTT, ZHA and Matter** in one list – also several Zigbee2MQTT instances and several houses.
+- 📡 **All devices in one list** – Zigbee2MQTT (also several instances), ZHA, Matter, Shelly, ESPHome and any other integration, filterable by integration; also several houses.
 - 💡 **Reassign swapped spots** – lamps blink one after another, you pick the right position; names and entity IDs swap without taking a spot out of the ceiling.
 - 🔍 **Clean up** – align old entity IDs, resolve duplicate entities, find and repair broken references (e.g. cards that only show an error).
 - 🕸️ **Network view** – the Zigbee network as a tree with link quality.
@@ -63,8 +63,10 @@
 ## Installation
 
 1. Click **"Add repository to my Home Assistant"** above – or in Home Assistant: *Settings → Add-ons → Add-on Store → ⋮ → Repositories* and add `https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager`.
-2. Install and start **"Zigbee Devices Manager"**.
-3. **"Zigbee Namen"** appears in the sidebar.
+2. Install and start **"Gerätemanager"**.
+3. **"Gerätemanager"** appears in the sidebar.
+
+If you installed it as "Zigbee Devices Manager", the next update brings the new name – settings, assignments and backups stay.
 
 ## Quick start
 
@@ -78,7 +80,8 @@
 <details>
 <summary><b>Device list, filters and naming scheme</b></summary>
 
-- List of all new and existing devices, inline rename, search, filters "new", "named", "doesn't fit", "planned"; plus filters by house, floor, room and type (with counts, "ohne Raum/Typ" finds gaps). Bulk actions only affect the visible devices.
+- List of all devices from Home Assistant (*Settings → Devices & services → Devices*), grouped by integration or gateway; the identifier is the IEEE (Zigbee), node ID (Matter) or MAC address (Wi-Fi/LAN, e.g. Shelly). Services such as sun or weather forecast are hidden ("Dienste zeigen" shows them), devices disabled in HA are marked.
+- Inline rename, search, filters "new", "named", "doesn't fit", "planned"; plus filters by house, floor, room and type (with counts, "ohne Raum/Typ" finds gaps). Bulk actions only affect the visible devices.
 - **Configurable naming scheme**, e.g. `{room}_{type}_{nr}` → `WZ_LP_01`
   - Abbreviations for rooms and device types (sorted alphabetically by name)
   - Automatic counter per room+type that skips names already in use
@@ -93,11 +96,11 @@
 </details>
 
 <details>
-<summary><b>Renaming: Zigbee2MQTT, ZHA, Matter</b></summary>
+<summary><b>Renaming: Zigbee2MQTT, ZHA, Matter, Shelly …</b></summary>
 
 - **Zigbee2MQTT:** renamed like Z2M's own dialog (friendly name, MQTT topic and – with "Entity-IDs in HA anpassen" – entity IDs, `homeassistant_rename`). The add-on waits for Z2M's reply and for Home Assistant to pick up the device again, then updates HA (old custom name removed, area set last).
 - **Several Zigbee2MQTT instances:** the add-on asks MQTT (`<base>/bridge/devices`) which instance the device really belongs to and detects base topics itself (`<base>/bridge/info`).
-- **ZHA and Matter:** renamed in Home Assistant's device registry (`name_by_user`), including entity IDs, references and area. Matter devices are listed under the "Matter" gateway with their node ID; pairing still happens in the Home Assistant app.
+- **ZHA, Matter and every other integration** (Shelly, ESPHome, Tasmota …): renamed in Home Assistant's device registry (`name_by_user`), including entity IDs, references and area. Matter devices are listed under the "Matter" gateway with their node ID; pairing still happens in the Home Assistant app.
 - **Set the room in Home Assistant** ("Raum als Bereich in HA setzen", default on); missing areas are created. Assigning a room also works without renaming.
 - **Independent options:** rename in Zigbee2MQTT, rename entity IDs, update references (default on), YAML files, Node-RED flows.
 - **Verification** with ✅/⚠️/❌ for device names (also in Z2M), entity IDs and leftover references; a rename that did not happen is reported explicitly.
@@ -123,11 +126,11 @@
 </details>
 
 <details>
-<summary><b>Gateways, pairing, deleting</b></summary>
+<summary><b>Integrations, pairing, deleting</b></summary>
 
-- **"Gateways" tab:** every Zigbee2MQTT instance (and ZHA, Matter) with label, MQTT base topic and house. "4 Min anlernen" opens the network for pairing, with countdown.
+- **"Integrationen" tab:** every Zigbee2MQTT instance, ZHA, Matter and every other integration with label, house (applies to all its devices) and – for Zigbee2MQTT – MQTT base topic. "4 Min anlernen" opens the network for pairing, with countdown.
 - **Jump to a device:** "ⓘ Z2M" opens it in the Zigbee2MQTT UI, "⌂ HA" opens the device page in Home Assistant.
-- **Delete devices completely:** Zigbee2MQTT devices leave the network and are removed from Z2M, ZHA devices via `zha.remove`, Matter devices are removed from Home Assistant's Matter fabric. Nothing happens until you type **LÖSCHEN**. The ZHA coordinator is protected.
+- **Delete devices completely:** Zigbee2MQTT devices leave the network and are removed from Z2M, ZHA devices via `zha.remove`, Matter devices are removed from Home Assistant's Matter fabric. Nothing happens until you type **LÖSCHEN**. The ZHA coordinator is protected. Devices of other integrations are not deleted by the add-on – remove them in Home Assistant from their integration.
 </details>
 
 <details>

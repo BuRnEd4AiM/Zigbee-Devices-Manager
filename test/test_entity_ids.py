@@ -667,3 +667,92 @@ class ReassignMixed(unittest.IsolatedAsyncioTestCase):
         # der Zigbee-Spot hat keinen Identifizieren-Knopf, der Matter-Spot keine Linkqualität/Einschaltverhalten
         self.assertEqual(sorted(lost), ["button.s2_wzel_lsp01_identify", "select.s2_wzel_lsp08_power_on_behavior", "sensor.s2_wzel_lsp08_linkquality"])
         self.assertEqual(lost["button.s2_wzel_lsp01_identify"], ["Szene „Abends“"])
+
+
+class AllDevices(unittest.IsolatedAsyncioTestCase):
+    """Alle Geräte aus der Geräte-Registry – nicht nur Zigbee und Matter, sondern z. B. auch Shelly; gruppiert nach Integration."""
+    DEVICES = [
+        {"id": "bridge", "name": "Zigbee2MQTT Bridge", "identifiers": [["mqtt", "zigbee2mqtt_bridge_0x00124b0030aa0000"]]},
+        {"id": "z1", "name": "WZ_LP_01", "identifiers": [["mqtt", "zigbee2mqtt_0x680ae2fffe1a0001"]], "via_device_id": "bridge"},
+        {"id": "m1", "name": "Eve Energy", "identifiers": [["matter", "deviceid_AB-3-MatterNodeDevice"]]},
+        {"id": "s1", "name": "shellyplus1pm-a8032ab1c2d3", "name_by_user": None, "identifiers": [["shelly", "a8032ab1c2d3"]],
+         "connections": [["mac", "a8:03:2a:b1:c2:d3"]], "config_entries": ["e_shelly1"], "primary_config_entry": "e_shelly1",
+         "manufacturer": "Shelly", "model": "Shelly Plus 1PM", "area_id": "kueche"},
+        {"id": "s2", "name": "shellyplug-s-c45bbe6e7f80", "name_by_user": "Büro Steckdose", "identifiers": [], "connections": [["mac", "c4:5b:be:6e:7f:80"]],
+         "config_entries": ["e_shelly2"], "disabled_by": "user"},
+        {"id": "t1", "name": "Tasmota Steckdose", "identifiers": [["mqtt", "DC4F22AABBCC"]], "config_entries": ["e_mqtt"]},
+        {"id": "sun", "name": "Sun", "identifiers": [["sun", "e_sun"]], "config_entries": ["e_sun"], "entry_type": "service"},
+    ]
+    ENTRIES = [{"entry_id": "e_shelly1", "domain": "shelly"}, {"entry_id": "e_shelly2", "domain": "shelly"},
+               {"entry_id": "e_mqtt", "domain": "mqtt"}, {"entry_id": "e_sun", "domain": "sun"}]
+
+    def collect(self):
+        names = {"shelly": "Shelly", "mqtt": "MQTT", "sun": "Sun"}
+        out, bridges = server.collect_devices(self.DEVICES, AREAS, {e["entry_id"]: e["domain"] for e in self.ENTRIES}, names)
+        return {d["id"]: d for d in out}, bridges
+
+    def test_every_device_is_listed_except_z2m_bridge(self):
+        out, bridges = self.collect()
+        self.assertEqual(sorted(out), ["m1", "s1", "s2", "sun", "t1", "z1"])
+        self.assertEqual(bridges["bridge"]["source"], "z2m")  # die Z2M-Bridge ist Gateway, kein Gerät
+
+    def test_other_integrations_get_their_own_gateway(self):
+        out, bridges = self.collect()
+        s1 = out["s1"]
+        self.assertEqual((s1["source"], s1["source_name"], s1["bridge"], s1["mac"], s1["ieee"], s1["area"]),
+                         ("shelly", "Shelly", "shelly", "a8:03:2a:b1:c2:d3", "", "Küche"))
+        self.assertTrue(s1["is_new"])
+        self.assertEqual((out["s2"]["name"], out["s2"]["is_new"], out["s2"]["bridge"], out["s2"]["disabled"]), ("Büro Steckdose", False, "shelly", True))
+        self.assertEqual(bridges["shelly"], {"id": "shelly", "source": "shelly", "name": "Shelly"})
+        # MQTT-Gerät, das nicht von Zigbee2MQTT kommt: Integration MQTT, kein Zigbee
+        self.assertEqual((out["t1"]["source"], out["t1"]["bridge"], out["t1"]["ieee"]), ("mqtt", "mqtt", ""))
+        # Zigbee und Matter wie bisher
+        self.assertEqual((out["z1"]["source"], out["z1"]["bridge"], out["z1"]["ieee"]), ("z2m", "bridge", "0x680ae2fffe1a0001"))
+        self.assertEqual((out["m1"]["source"], out["m1"]["bridge"], out["m1"]["node"]), ("matter", "matter", 3))
+
+    def test_services_are_marked(self):
+        out, _ = self.collect()
+        self.assertTrue(out["sun"]["service"])
+        self.assertFalse(out["s1"]["service"])
+
+    def test_without_config_entries_first_identifier_decides(self):
+        """Ältere HA-Versionen ohne config_entries/get: Integration aus der ersten Kennung, Name aus der Domäne."""
+        out, _ = server.collect_devices(self.DEVICES, AREAS)
+        self.assertEqual((out[2]["source"], out[2]["source_name"]), ("shelly", "Shelly"))
+        self.assertEqual(out[3]["source"], "sonstige")  # weder Eintrag noch Kennung
+
+    async def test_delete_refuses_other_integrations(self):
+        saved = {k: getattr(server, k) for k in ("ha", "safe_backup", "z2m_devices", "remove_in_bridge", "remove_in_ha", "verify_delete")}
+        calls = []
+
+        async def ha(cmds):
+            return [list(self.DEVICES) if c["type"] == "config/device_registry/list" else [] for c in cmds]
+
+        async def noop(*a, **k):
+            return {}
+
+        async def remove_in_bridge(it, owners, force):
+            calls.append(it["device_id"])
+            return True, None, False
+
+        async def remove_in_ha(items):
+            return []
+
+        async def verify_delete(items, forced=()):
+            return [], []
+
+        server.ha, server.safe_backup, server.z2m_devices = ha, noop, noop
+        server.remove_in_bridge, server.remove_in_ha, server.verify_delete = remove_in_bridge, remove_in_ha, verify_delete
+        try:
+            class Req:
+                async def json(self):
+                    # die Oberfläche gibt eine falsche Quelle an – maßgeblich ist die Registry
+                    return {"items": [{"device_id": "s1", "name": "Shelly", "source": "matter"}, {"device_id": "m1", "name": "Eve", "source": "matter"}]}
+            import json
+            res = json.loads((await server.delete_devices(Req())).text)
+            self.assertEqual(calls, ["m1"])
+            self.assertEqual([e["device_id"] for e in res["errors"]], ["s1"])
+            self.assertIn("anderen Integration", res["errors"][0]["error"])
+        finally:
+            for k, v in saved.items():
+                setattr(server, k, v)

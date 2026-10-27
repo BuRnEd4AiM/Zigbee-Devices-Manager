@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="zigbee_devices_manager/logo.png" alt="Zigbee Devices Manager" width="128">
+  <img src="zigbee_devices_manager/logo.png" alt="Gerätemanager" width="128">
 </p>
 
-<h1 align="center">Zigbee Devices Manager</h1>
+<h1 align="center">Gerätemanager</h1>
 
 <p align="center">
-  Home-Assistant-Add-on, das Zigbee- und Matter-Geräte nach einem festen Namensschema benennt –<br>
-  samt Entity-IDs, Räumen, Automationen, Szenen und Dashboards.
+  Home-Assistant-Add-on, das alle Geräte – Zigbee, Matter, Shelly und jede andere Integration – nach einem festen Namensschema benennt,<br>
+  samt Entity-IDs, Räumen, Automationen, Szenen und Dashboards. (Früher „Zigbee Devices Manager“.)
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@
 
 - 🏷️ **Namensschema statt Wildwuchs** – z. B. `{house}{floor}-{room}-{type}{nr}` → `S2-WZEL-LSP03`, mit Kürzeln, automatischem Hochzählen und freien Nummern.
 - 🔗 **Alles zieht mit** – Gerätename in Zigbee2MQTT bzw. Home Assistant, Entity-IDs, Raum als HA-Bereich und Verweise in Automationen, Skripten, Szenen, Dashboards, YAML und Node-RED. Vorher Vorschau, danach Prüfung.
-- 📡 **Zigbee2MQTT, ZHA und Matter** in einer Liste – auch mehrere Zigbee2MQTT-Instanzen und mehrere Häuser.
+- 📡 **Alle Geräte in einer Liste** – Zigbee2MQTT (auch mehrere Instanzen), ZHA, Matter, Shelly, ESPHome und jede andere Integration, nach Integration filterbar; auch mehrere Häuser.
 - 💡 **Vertauschte Spots neu zuordnen** – Lampen blinken nacheinander, du wählst den richtigen Platz; Namen und Entity-IDs tauschen, ohne dass ein Spot aus der Decke muss.
 - 🔍 **Aufräumen** – alte Entity-IDs angleichen, doppelte Entitäten auflösen, kaputte Verweise finden und reparieren (z. B. Karten, die nur noch einen Fehler zeigen).
 - 🕸️ **Netzwerk-Ansicht** – das Zigbee-Netz als Baum mit Verbindungsqualität.
@@ -61,8 +61,10 @@
 ## Installation
 
 1. Auf den Knopf **„Add repository to my Home Assistant“** oben klicken – oder in Home Assistant: *Einstellungen → Add-ons → Add-on-Store → ⋮ → Repositories* und `https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager` hinzufügen.
-2. **„Zigbee Devices Manager“** installieren und starten.
-3. In der Seitenleiste erscheint **„Zigbee Namen“**.
+2. **„Gerätemanager“** installieren und starten.
+3. In der Seitenleiste erscheint **„Gerätemanager“**.
+
+Wer das Add-on schon als „Zigbee Devices Manager“ installiert hat, bekommt den neuen Namen mit dem nächsten Update – Einstellungen, Zuordnungen und Sicherungen bleiben.
 
 ## Schnellstart
 
@@ -76,7 +78,8 @@
 <details>
 <summary><b>Geräteliste, Filter und Namensschema</b></summary>
 
-- Liste aller neuen und bestehenden Geräte, Inline-Umbenennen, Suche, Filter „Neu“, „Benannt“, „Passt nicht“, „Geplant“; zusätzlich Filter nach Haus, Etage, Raum und Typ (mit Anzahl, „ohne Raum/Typ“ findet Lücken). Sammelaktionen wirken nur auf die sichtbaren Geräte.
+- Liste aller Geräte aus Home Assistant (*Einstellungen → Geräte & Dienste → Geräte*), gruppiert nach Integration bzw. Gateway; Kennung ist die IEEE (Zigbee), die Node-ID (Matter) oder die MAC-Adresse (WLAN/LAN, z. B. Shelly). Dienste wie Sonne oder Wettervorhersage sind ausgeblendet („Dienste zeigen“), in HA deaktivierte Geräte markiert.
+- Inline-Umbenennen, Suche, Filter „Neu“, „Benannt“, „Passt nicht“, „Geplant“; zusätzlich Filter nach Haus, Etage, Raum und Typ (mit Anzahl, „ohne Raum/Typ“ findet Lücken). Sammelaktionen wirken nur auf die sichtbaren Geräte.
 - **Namensschema** frei konfigurierbar, z. B. `{room}_{type}_{nr}` → `WZ_LP_01`
   - Kürzel für Räume und Gerätetypen zum Auswählen (alphabetisch nach Namen sortiert)
   - Automatisches Hochzählen je Raum+Typ, überspringt belegte Namen
@@ -92,11 +95,11 @@
 </details>
 
 <details>
-<summary><b>Umbenennen: Zigbee2MQTT, ZHA, Matter</b></summary>
+<summary><b>Umbenennen: Zigbee2MQTT, ZHA, Matter, Shelly …</b></summary>
 
 - **Zigbee2MQTT:** Umbenannt wird wie mit Z2Ms eigenem Dialog (Friendly-Name, MQTT-Topic und – mit „Entity-IDs in HA anpassen“ – die Entity-IDs, `homeassistant_rename`). Das Add-on wartet auf Z2Ms Antwort, dann darauf, dass Z2M das Gerät neu in Home Assistant angemeldet hat, und zieht HA nach (alter eigener Name in HA wird entfernt, Bereich zuletzt gesetzt). Meldet Z2M einen Fehler, erscheint er direkt.
 - **Mehrere Zigbee2MQTT-Instanzen:** Das Add-on fragt per MQTT (`<base>/bridge/devices`), in welcher Instanz das Gerät wirklich steckt, und erkennt die Basis-Topics selbst (`<base>/bridge/info`).
-- **ZHA und Matter:** Umbenannt wird in der Geräte-Registry von Home Assistant (`name_by_user`), samt Entity-IDs, Verweisen und Bereich. Matter-Geräte stehen unter dem Gateway „Matter“ mit Node-ID statt IEEE; gekoppelt werden sie weiterhin in der Home-Assistant-App.
+- **ZHA, Matter und alle anderen Integrationen** (Shelly, ESPHome, Tasmota …): Umbenannt wird in der Geräte-Registry von Home Assistant (`name_by_user`), samt Entity-IDs, Verweisen und Bereich. Matter-Geräte stehen unter dem Gateway „Matter“ mit Node-ID statt IEEE; gekoppelt werden sie weiterhin in der Home-Assistant-App.
 - **Raum in Home Assistant setzen:** Mit „Raum als Bereich in HA setzen“ (Standard: an) wird das Gerät dem gewählten Raum zugeordnet; fehlende Bereiche werden angelegt. „Raum setzen“ bzw. „Raum in HA setzen“ geht auch ohne Umbenennen.
 - **Einzeln wählbare Optionen:** „In Zigbee2MQTT umbenennen“, „Entity-IDs in HA anpassen“, „Verweise in Automationen/Dashboards“ (Standard: an), „YAML-Dateien“ und „Node-RED-Flows“.
 - **Prüfung nach dem Umbenennen:** ✅/⚠️/❌ für Gerätenamen (auch in Z2M), Entity-IDs und übrig gebliebene alte Verweise; „Erneut prüfen“ liest erneut nach. Bleibt eine geplante Umbenennung aus, steht das ausdrücklich da.
@@ -122,11 +125,11 @@
 </details>
 
 <details>
-<summary><b>Gateways, Anlernen, Löschen</b></summary>
+<summary><b>Integrationen, Anlernen, Löschen</b></summary>
 
-- **Tab „Gateways“:** jede Zigbee2MQTT-Instanz (und ZHA, Matter) mit Bezeichnung, MQTT-Basis-Topic und Haus. „4 Min anlernen“ öffnet das Netz (Z2M per `bridge/request/permit_join`, ZHA per `zha.permit`), mit Countdown.
-- **Direkt zum Gerät:** „ⓘ Z2M“ öffnet das Gerät in der Zigbee2MQTT-Oberfläche, „⌂ HA“ die Geräteseite in Home Assistant. Die Z2M-Oberfläche findet das Add-on selbst; bei mehreren Instanzen im Tab „Gateways“ wählbar.
-- **Geräte restlos löschen:** Zigbee2MQTT-Geräte werden aus dem Netz abgemeldet und aus Z2M entfernt, ZHA-Geräte per `zha.remove`, Matter-Geräte nimmt Home Assistant aus seinem Matter-Netz. Die Vorschau zeigt Entitäten, angebundene Geräte und betroffene Automationen/Dashboards; ausgeführt wird erst nach eingetipptem **LÖSCHEN**. Der ZHA-Koordinator ist geschützt.
+- **Tab „Integrationen“:** jede Zigbee2MQTT-Instanz, ZHA, Matter und jede andere Integration mit Bezeichnung, Haus (gilt für alle ihre Geräte) und – bei Zigbee2MQTT – MQTT-Basis-Topic. „4 Min anlernen“ öffnet das Netz (Z2M per `bridge/request/permit_join`, ZHA per `zha.permit`), mit Countdown.
+- **Direkt zum Gerät:** „ⓘ Z2M“ öffnet das Gerät in der Zigbee2MQTT-Oberfläche, „⌂ HA“ die Geräteseite in Home Assistant. Die Z2M-Oberfläche findet das Add-on selbst; bei mehreren Instanzen im Tab „Integrationen“ wählbar.
+- **Geräte restlos löschen:** Zigbee2MQTT-Geräte werden aus dem Netz abgemeldet und aus Z2M entfernt, ZHA-Geräte per `zha.remove`, Matter-Geräte nimmt Home Assistant aus seinem Matter-Netz. Die Vorschau zeigt Entitäten, angebundene Geräte und betroffene Automationen/Dashboards; ausgeführt wird erst nach eingetipptem **LÖSCHEN**. Der ZHA-Koordinator ist geschützt. Geräte anderer Integrationen löscht das Add-on nicht – die entfernt man in Home Assistant bei ihrer Integration.
 </details>
 
 <details>
@@ -152,7 +155,8 @@ Was sich je Version geändert hat, steht im **[Changelog](zigbee_devices_manager
 
 ## Hinweise
 
-- Echtes Anlernen neuer Geräte passiert weiterhin in ZHA/Z2M bzw. in der Home-Assistant-App (Matter); neue Geräte erscheinen hier automatisch als „neu“.
+- Echtes Anlernen neuer Geräte passiert weiterhin in ZHA/Z2M, in der Home-Assistant-App (Matter) bzw. bei der jeweiligen Integration; neue Geräte erscheinen hier automatisch als „neu“.
+- Das Add-on hieß früher „Zigbee Devices Manager“. Repository-Adresse, interner Name (`zigbee_devices_manager`) und der Ordner `/config/zigbee_devices_manager` sind geblieben, damit Updates und Sicherungen weiter passen.
 - Zigbee2MQTT-Basis-Topic je Gateway oder in den Add-on-Optionen (`z2m_base_topic`, Standard `zigbee2mqtt`).
 - Schema und Zuweisungen liegen in `/data/store.json` des Add-ons, eine Kopie und die Sicherungen unter `/config/zigbee_devices_manager/`. Wer bewusst neu anfangen will, löscht vor der Neuinstallation auch diesen Ordner.
 - Das Add-on bindet `/config` und `/addon_configs` ein (YAML, Node-RED) und liest über die Supervisor-API (nur lesend) die installierten Zigbee2MQTT-Add-ons, um deren Oberfläche zu verlinken.

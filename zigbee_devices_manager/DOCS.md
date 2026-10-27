@@ -1,6 +1,6 @@
-# Zigbee Devices Manager
+# Gerätemanager
 
-Nach dem Start erscheint in der Seitenleiste **„Zigbee Namen“**.
+Nach dem Start erscheint in der Seitenleiste **„Gerätemanager“**. Aufgelistet sind alle Geräte aus Home Assistant – Zigbee (Zigbee2MQTT, ZHA), Matter und jede andere Integration wie Shelly oder ESPHome. Dienste (Sonne, Wettervorhersage, Add-ons …) blendet „Dienste zeigen“ ein.
 
 ## Schnellstart
 
@@ -22,7 +22,7 @@ Geräte auswählen → **„💡 Neu zuordnen“**: Die Geräte blinken nacheina
 
 | Option | Bedeutung |
 |---|---|
-| `z2m_base_topic` | MQTT-Basis-Topic von Zigbee2MQTT, falls nicht automatisch erkannt (Standard `zigbee2mqtt`). Je Gateway lässt er sich auch im Reiter „Gateways“ eintragen. |
+| `z2m_base_topic` | MQTT-Basis-Topic von Zigbee2MQTT, falls nicht automatisch erkannt (Standard `zigbee2mqtt`). Je Gateway lässt er sich auch im Reiter „Integrationen“ eintragen. |
 
 ## Sicherungen
 

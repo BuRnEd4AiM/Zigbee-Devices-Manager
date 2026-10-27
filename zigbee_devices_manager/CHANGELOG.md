@@ -1,5 +1,17 @@
 # Änderungen
 
+## 0.17.0
+
+*27.10.2026*
+
+- **Neuer Name: „Gerätemanager“** – in der Seitenleiste, im Add-on-Store und in der Oberfläche, mit neuem Symbol. Das Update installiert sich über das bisherige Add-on: Namensschema, Zuordnungen, Gateways und Sicherungen bleiben.
+- **Alle Geräte aus Home Assistant** – nicht mehr nur Zigbee und Matter, sondern alles, was unter *Einstellungen → Geräte & Dienste → Geräte* steht: Shelly, ESPHome, Tasmota/MQTT, Sonos … Sie lassen sich genauso nach dem Namensschema benennen, einem Raum zuordnen, tauschen und angleichen; Entity-IDs und Verweise in Automationen und Dashboards ziehen mit. Die Spalte „Kennung“ zeigt die IEEE (Zigbee), die Node-ID (Matter) oder die MAC-Adresse (WLAN/LAN).
+- Die Geräte sind nach **Integration** gruppiert: Auswahl „Alle Integrationen“ über der Liste und Spalte „Integration“. Der Reiter „Gateways“ heißt jetzt „Integrationen“; dort lässt sich auch für jede Integration ein Haus festlegen (z. B. alle Shelly im Haus S).
+- **Dienste** (Sonne, Wettervorhersage, Add-ons …) sind keine Geräte zum Benennen und standardmäßig ausgeblendet – „Dienste zeigen“ blendet sie ein. In Home Assistant deaktivierte Geräte sind markiert.
+- **Löschen** bleibt auf Zigbee2MQTT, ZHA und Matter beschränkt – nur dort kann das Add-on ein Gerät restlos aus seinem Netz abmelden. Geräte anderer Integrationen entfernt man in Home Assistant bei der Integration; das Add-on sagt das, statt nur halb zu löschen.
+- „💡“ lässt auch andere Geräte blinken, wenn sie einen Identifizieren-Knopf haben oder eine Lampe sind. Schalter (z. B. Shelly-Relais) schaltet das Add-on dafür nicht.
+- Export der Geräteliste: Spalte „kennung“ statt „ieee“, die Dateien heißen `geraete.csv` bzw. `geraete.json`.
+
 ## 0.16.0
 
 *25.10.2026*
