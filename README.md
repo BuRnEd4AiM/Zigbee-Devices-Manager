@@ -79,6 +79,7 @@ Wer das Add-on schon als „Zigbee Devices Manager“ installiert hat, bekommt d
 <summary><b>Geräteliste, Filter und Namensschema</b></summary>
 
 - Liste aller Geräte aus Home Assistant (*Einstellungen → Geräte & Dienste → Geräte*), gruppiert nach Integration bzw. Gateway; Kennung ist die IEEE (Zigbee), die Node-ID (Matter) oder die MAC-Adresse (WLAN/LAN, z. B. Shelly). Dienste wie Sonne oder Wettervorhersage sind ausgeblendet („Dienste zeigen“), in HA deaktivierte Geräte markiert.
+- **Ein Gerät, eine Zeile:** Steht ein Gerät über mehrere Integrationen in HA (z. B. Tablet über Mobile App und Fully Kiosk Browser) und heißt dort gleich, erscheint es einmal – aufklappbar, mit Filter „Mehrfach eingetragen“. Namen, Raum und Typ gelten für alle Einträge. Unterschiedlich benannte Einträge fasst „🔗 Zusammenfassen“ zusammen.
 - Inline-Umbenennen, Suche, Filter „Neu“, „Benannt“, „Passt nicht“, „Geplant“; zusätzlich Filter nach Haus, Etage, Raum und Typ (mit Anzahl, „ohne Raum/Typ“ findet Lücken). Sammelaktionen wirken nur auf die sichtbaren Geräte.
 - **Namensschema** frei konfigurierbar, z. B. `{room}_{type}_{nr}` → `WZ_LP_01`
   - Kürzel für Räume und Gerätetypen zum Auswählen (alphabetisch nach Namen sortiert)

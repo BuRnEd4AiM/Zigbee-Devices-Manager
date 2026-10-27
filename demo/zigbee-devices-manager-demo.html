@@ -51,6 +51,11 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 .badge.new{background:color-mix(in srgb,var(--new) 18%,transparent);color:var(--new)}
 .badge.ok{color:var(--ok)}.badge.plan{color:var(--accent)}
 .sugg{color:var(--ok);font-weight:600;font-family:ui-monospace,Menlo,Consolas,monospace}
+/* Gerät mit mehreren Einträgen (z. B. Mobile App + Fully Kiosk Browser): aufklappbar, Einträge eingerückt darunter */
+.grpT{background:none;border:0;padding:2px 0 0;color:var(--accent);cursor:pointer;font-size:12px;font-weight:400}
+.grpT:hover{text-decoration:underline}
+tr.member td{background:color-mix(in srgb,var(--chip) 55%,transparent)}
+tr.member td.name{font-weight:400;padding-left:22px}
 .empty{padding:32px;text-align:center;color:var(--muted)}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
@@ -373,7 +378,8 @@ const DEFAULT_SCHEME = {
 const DEMO_FLOORS = [{id: "fl_eg", name: "Erdgeschoss", level: 0}, {id: "fl_og", name: "Obergeschoss", level: 1}, {id: "fl_ug", name: "Untergeschoss", level: -1}];
 const DEMO_AREAS = [["Wohnzimmer", "fl_eg"], ["Küche", "fl_eg"], ["Flur", "fl_eg"], ["Schlafzimmer", "fl_og"], ["Bad", "fl_og"], ["Büro", "fl_og"], ["Terrasse", "fl_eg"], ["Keller", "fl_ug"]].map(([n, f]) => ({id: "area_" + n.toLowerCase().replace("ü", "ue"), name: n, floor_id: f}));
 const DEMO_BRIDGES = [{id: "b1", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 1)", config_url: "http://192.168.1.20:8080/#/settings"}, {id: "b2", source: "z2m", name: "Zigbee2MQTT Bridge (Haus 2)"}, {id: "matter", source: "matter", name: "Matter"},
-  {id: "esphome", source: "esphome", name: "ESPHome"}, {id: "met", source: "met", name: "Meteorologisk institutt (Met.no)"}, {id: "shelly", source: "shelly", name: "Shelly"}, {id: "sun", source: "sun", name: "Sonne"}];
+  {id: "esphome", source: "esphome", name: "ESPHome"}, {id: "fully_kiosk", source: "fully_kiosk", name: "Fully Kiosk Browser"}, {id: "met", source: "met", name: "Meteorologisk institutt (Met.no)"},
+  {id: "mobile_app", source: "mobile_app", name: "Mobile App"}, {id: "shelly", source: "shelly", name: "Shelly"}, {id: "sun", source: "sun", name: "Sonne"}];
 const DEMO_UIS = [{slug: "45df7312_zigbee2mqtt", name: "Zigbee2MQTT", url: "/api/hassio_ingress/demo-z2m-1/", state: "started"}, {slug: "45df7312_zigbee2mqtt_edge", name: "Zigbee2MQTT Edge", url: "/api/hassio_ingress/demo-z2m-2/", state: "started"}];
 const DEMO_DEVICES = [
   ["TRÅDFRI bulb E27 WS opal 1055lm", "IKEA of Sweden", "LED1545G12", "0x680ae2fffe1a0001", "Wohnzimmer", "Wohnzimmer Stehlampe"],
@@ -409,6 +415,9 @@ const DEMO_OTHER = [
   ["shelly", "Shelly Plug S", "Shelly", "Shelly Plug S", "c4:5b:be:6e:7f:80", "Büro", "Büro Steckdose Drucker"],
   ["shelly", "shellyhtg3-e4b3231f2a3b", "Shelly", "Shelly H&T Gen3", "e4:b3:23:1f:2a:3b", "Bad", null],
   ["esphome", "garagentor", "Espressif", "ESP32", "24:6f:28:aa:bb:cc", "", "Garagentor"],
+  // dasselbe Tablet zweimal: über die Home-Assistant-App und über den Fully Kiosk Browser – gleicher Name, also eine Zeile
+  ["mobile_app", "Galaxy Tab A7", "samsung", "SM-T500", "", "Wohnzimmer", "Wohnzimmer Tablet"],
+  ["fully_kiosk", "Galaxy Tab A7", "samsung", "SM-T500", "b4:6c:47:12:34:56", "Wohnzimmer", "Wohnzimmer Tablet"],
   ["met", "Forecast Home", "Met.no", "Forecast", "", "", null, true],
   ["sun", "Sun", "Home Assistant", "", "", "", null, true]
 ].map((d, i) => ({id: "demoO" + i, source: d[0], source_name: DEMO_BRIDGES.find(b => b.id === d[0]).name, bridge: d[0], orig_name: d[1], manufacturer: d[2], model: d[3], ieee: "", mac: d[4], area: d[5],
@@ -494,9 +503,11 @@ const api = {
     const r = await fetch("api/store", {method: "PUT", body: JSON.stringify(store)});
     if (!r.ok) throw new Error(await r.text());
   },
+  /** list: [[Gerät, neuer Name, Zeile], …] – der Raum kommt aus der Zeile (bei einem Gerät mit mehreren Einträgen die gemeinsame). */
   payload(list, forceArea = false) {
-    return list.map(([d, name]) => ({device_id: d.id, name, old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || "",
-      ...((S.setArea || forceArea) && roomOf(d) ? {area_id: roomOf(d).area_id || "", area_name: roomOf(d).name, current_area_id: d.area_id || "", current_area: d.area || ""} : {})}));
+    return list.map(([d, name, row = d]) => { const room = roomOf(row);
+      return {device_id: d.id, name, old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || "",
+        ...((S.setArea || forceArea) && room ? {area_id: room.area_id || "", area_name: room.name, current_area_id: d.area_id || "", current_area: d.area || ""} : {})}; });
   },
   opts() { const on = S.renameEntities; return {set_area: S.setArea, rename_z2m: S.renameZ2m, rename_entities: on, update_references: on && S.updateRefs, update_yaml: on && S.updateYaml, update_nodered: on && S.updateNodered}; },
   async post(path, body) {
@@ -699,7 +710,7 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), areas: [], haFloors: [], z2mBases: [], z2mUis: [], bridges: [], gateways: {}, gwFilter: "", facets: {}, permitUntil: {}, permitReal: {}, editing: null, storeLoaded: false, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: true, updateYaml: false, updateNodered: false, deleteForce: true, showServices: false};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), open: new Set(), areas: [], haFloors: [], z2mBases: [], z2mUis: [], bridges: [], gateways: {}, gwFilter: "", facets: {}, permitUntil: {}, permitReal: {}, editing: null, storeLoaded: false, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: true, updateYaml: false, updateNodered: false, deleteForce: true, showServices: false};
 /** Haken beim Umbenennen und Löschen (und „Dienste zeigen“) – werden im Store gemerkt. */
 const OPTION_KEYS = ["setArea", "renameZ2m", "renameEntities", "updateRefs", "updateYaml", "updateNodered", "deleteForce", "showServices"];
 
@@ -712,7 +723,30 @@ function persist() {
 }
 /** Dienste (Sonne, Wettervorhersage, Add-ons …) sind keine Geräte zum Benennen – nur sichtbar, wenn „Dienste zeigen“ an ist. */
 const shownDevices = () => S.devices.filter(d => S.showServices || !d.service);
-const allRows = () => [...shownDevices(), ...S.planned.map(p => ({id: p.id, name: p.name, orig_name: "", manufacturer: "", model: "", ieee: "", area: "", is_new: false, planned: true}))];
+/** Ein Gerät, mehrere Einträge in Home Assistant – z. B. ein Tablet über die Mobile App und den Fully Kiosk Browser. Benannte
+ *  Einträge gleichen Namens aus verschiedenen Integrationen sind ein Gerät und werden eine Zeile (die Einträge unter "members");
+ *  Haus/Etage/Raum/Typ gelten für alle. Gleicher Name in derselben Integration sind zwei Geräte (Namenskonflikt) – die bleiben getrennt. */
+function groupDevices(devs) {
+  const same = new Map(), row = new Map(); // row: Geräte-ID → Zeile der Gruppe beim vorderen Eintrag, null bei den übrigen
+  for (const d of devs) if (!d.is_new) { const k = d.name.trim().toLowerCase(); same.set(k, [...(same.get(k) || []), d]); }
+  const metaN = d => Object.values(S.meta[d.id] || {}).filter(Boolean).length;
+  for (const list of same.values()) {
+    if (list.length < 2 || new Set(list.map(d => d.source)).size < list.length) continue;
+    // vorn: der Eintrag mit den meisten Zuordnungen, dann Zigbee/Matter, dann nach Integration
+    const members = [...list].sort((a, b) => metaN(b) - metaN(a) || (b.source in SOURCE_NAMES) - (a.source in SOURCE_NAMES) || srcName(a).localeCompare(srcName(b), "de"));
+    row.set(members[0].id, {...members[0], members, source_name: members.map(srcName).join(" + "),
+      stale_ids: members.flatMap(m => m.stale_ids || []), dup_ids: members.flatMap(m => m.dup_ids || [])});
+    for (const m of members.slice(1)) row.set(m.id, null);
+    // Auswahl und Aufklappen hängen an der Zeile – wechselt der vordere Eintrag (z. B. nach dem ersten Zuordnen), wandern sie mit
+    for (const set of [S.sel, S.open]) if (members.slice(1).some(m => set.has(m.id))) { members.forEach(m => set.delete(m.id)); set.add(members[0].id); }
+  }
+  return devs.flatMap(d => !row.has(d.id) ? [d] : row.get(d.id) ? [row.get(d.id)] : []);
+}
+/** Die Einträge hinter einer Zeile: bei einem Gerät mit mehreren Einträgen alle, sonst das Gerät selbst. */
+const membersOf = d => d.members || [d];
+/** Haus/Etage/Raum/Typ für alle Einträge der Zeile setzen – vollständig, damit sie auch nach dem Trennen gleich bleiben. */
+const setMeta = (d, patch) => { const m = {...S.meta[d.id], ...patch}; for (const x of membersOf(d)) S.meta[x.id] = {...m}; };
+const allRows = () => [...groupDevices(shownDevices()), ...S.planned.map(p => ({id: p.id, name: p.name, orig_name: "", manufacturer: "", model: "", ieee: "", area: "", is_new: false, planned: true}))];
 /** Gateways bzw. Integrationen mit sichtbaren Geräten (Zigbee2MQTT-Instanzen immer). */
 const visibleBridges = () => S.bridges.filter(b => b.source === "z2m" || shownDevices().some(d => d.bridge === b.id));
 /** Raum: eigene Auswahl, sonst Raum des HA-Bereichs – aber nur, wenn er zu Haus/Etage des Geräts passt (z. B. kein „Bad (H1)“ für ein S2-Gerät). */
@@ -979,8 +1013,9 @@ function renderDevices() {
     if (S.filter === "odd" && (d.is_new || d.planned || parseName(d.name))) return false;
     if (S.filter === "ids" && !staleIds(d).length) return false;
     if (S.filter === "dups" && !dupIds(d).length) return false;
-    if (S.gwFilter && d.bridge !== S.gwFilter) return false;
-    return !q || [d.name, d.orig_name, addrOf(d), d.model, d.manufacturer, d.area, srcName(d)].join(" ").toLowerCase().includes(q);
+    if (S.filter === "multi" && !d.members) return false;
+    if (S.gwFilter && !membersOf(d).some(m => m.bridge === S.gwFilter)) return false;
+    return !q || [d.name, srcName(d), ...membersOf(d).flatMap(m => [m.orig_name, addrOf(m), m.model, m.manufacturer, m.area])].join(" ").toLowerCase().includes(q);
   };
   const base = allRows().filter(baseOk), rows = base.filter(d => facetOk(d));
   // Auswahl je Filter: nur Einträge, die bei den übrigen Filtern vorkommen, mit Anzahl
@@ -1004,11 +1039,14 @@ function renderDevices() {
   const staleAll = allRows().filter(idsDue).length, staleRows = rows.filter(d => idsDue(d) && (!S.sel.size || S.sel.has(d.id)));
   const bridges = visibleBridges(), multiGw = bridges.length > 1, gwLabel = id => S.gateways[id]?.label || S.bridges.find(b => b.id === id)?.name || "";
   const svcCount = S.devices.filter(d => d.service).length;
+  const multiAll = allRows().filter(d => d.members).length;
+  const selReal = rows.filter(d => S.sel.has(d.id) && !d.planned);
+  const areaOff = (r, m) => r.area_id ? r.area_id !== m.area_id : r.name.toLowerCase() !== (m.area || "").toLowerCase();
 
   $("#tab-devices").innerHTML = `
     <div class="bar">
       <input id="q" type="search" placeholder="Suchen (Name, Kennung, Modell …)" title="Sucht in Name, Kennung, Modell, Hersteller, Raum und Integration" value="${esc(S.q)}" style="width:280px">
-      <div class="chips">${[["all", "Alle"], ["new", "Neu (" + counts.new + ")"], ["named", "Benannt"], ["odd", "Passt nicht (" + allRows().filter(d => !d.is_new && !d.planned && !parseName(d.name)).length + ")"], ["planned", "Geplant"], ...(staleAll || S.filter === "ids" ? [["ids", "Alte Entity-IDs (" + staleAll + ")"]] : []), ...(dupAll || S.filter === "dups" ? [["dups", "Doppelte Entitäten (" + dupAll + ")"]] : [])].map(([k, l]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}">${l}</button>`).join("")}</div>
+      <div class="chips">${[["all", "Alle"], ["new", "Neu (" + counts.new + ")"], ["named", "Benannt"], ["odd", "Passt nicht (" + allRows().filter(d => !d.is_new && !d.planned && !parseName(d.name)).length + ")"], ["planned", "Geplant"], ...(staleAll || S.filter === "ids" ? [["ids", "Alte Entity-IDs (" + staleAll + ")"]] : []), ...(dupAll || S.filter === "dups" ? [["dups", "Doppelte Entitäten (" + dupAll + ")"]] : []), ...(multiAll || S.filter === "multi" ? [["multi", "Mehrfach eingetragen (" + multiAll + ")"]] : [])].map(([k, l]) => `<button data-f="${k}" class="${S.filter === k ? "on" : ""}"${k === "multi" ? ` title="Geräte, die über mehrere Integrationen in Home Assistant stehen (z. B. Tablet über Mobile App und Fully Kiosk Browser) – je Gerät eine Zeile, aufklappbar"` : ""}>${l}</button>`).join("")}</div>
       ${multiGw ? `<select id="gwf" title="Nur Geräte dieser Integration bzw. dieses Gateways zeigen"><option value="">Alle Integrationen</option>${bridges.map(b => `<option value="${esc(b.id)}"${S.gwFilter === b.id ? " selected" : ""}>${esc(gwLabel(b.id))}</option>`).join("")}</select>` : ""}
       <span style="flex:1"></span>
       <button class="btn" id="fromNames" title="Liest Haus, Etage, Raum und Typ aus den vorhandenen Namen (nach deinen Kürzeln) und wählt sie aus. Passende Namen bleiben unverändert.">⟳ Aus Namen zuordnen</button>
@@ -1032,6 +1070,7 @@ function renderDevices() {
       <button class="btn" id="bAssign" ${S.sel.size ? "" : "disabled"}>Zuweisen</button>
       <button class="btn" id="bArea" ${S.sel.size ? "" : "disabled"} title="Ordnet die ausgewählten Geräte ihrem gewählten Raum in Home Assistant zu – ohne sie umzubenennen">Raum in HA setzen</button>
       <button class="btn" id="bSwap" ${rows.filter(d => S.sel.has(d.id) && !d.planned && !d.is_new).length >= 2 ? "" : "disabled"} title="Für vertauscht eingebaute Spots: Die ausgewählten Geräte blinken nacheinander, du wählst jeweils den richtigen Namen. Namen, Entity-IDs und Raum wechseln mit – Automationen, Szenen und Dashboards bleiben beim Namen und steuern danach den richtigen Platz.">💡 Neu zuordnen</button>
+      <button class="btn" id="bMerge" ${selReal.length >= 2 ? "" : "disabled"} title="Für ein Gerät, das über mehrere Integrationen in Home Assistant steht (z. B. Tablet über Mobile App und Fully Kiosk Browser): Die ausgewählten Einträge bekommen denselben Namen und erscheinen danach als eine Zeile. Haus, Etage, Raum, Typ und Umbenennen gelten dann für alle.">🔗 Zusammenfassen</button>
       <button class="btn" id="bDel" ${S.sel.size ? "" : "disabled"} title="Löscht die ausgewählten Geräte restlos – in Zigbee2MQTT, ZHA bzw. Matter und in Home Assistant (mit Vorschau und Bestätigung). Geräte anderer Integrationen werden nicht gelöscht.">🗑 Löschen</button>
       <span style="flex:1"></span>
       <label class="sub" title="Ordnet das Gerät in Home Assistant dem gewählten Raum (Bereich) zu; fehlende Bereiche werden angelegt"><input type="checkbox" id="rArea" ${S.setArea ? "checked" : ""}> Raum als Bereich in HA setzen</label>
@@ -1048,26 +1087,40 @@ function renderDevices() {
       <thead><tr><th><input type="checkbox" id="selAll" ${rows.length && rows.every(d => S.sel.has(d.id)) ? "checked" : ""}></th>
         <th>Name</th><th>Neuer Vorschlag</th>${multiGw ? "<th>Integration</th>" : ""}<th>Haus</th><th>Etage</th><th>Raum</th><th>Typ</th><th class="hide-s hide-l">Gerät</th><th class="hide-s hide-m" title="IEEE (Zigbee), Node-ID (Matter) oder MAC-Adresse (WLAN/LAN)">Kennung</th><th>Status</th><th>Öffnen</th><th></th></tr></thead>
       <tbody>${rows.map(d => {
-        const s = sug.get(d.id), r = roomOf(d), t = typeOf(d);
+        const s = sug.get(d.id), r = roomOf(d), t = typeOf(d), off = membersOf(d).every(m => m.disabled);
         const nameCell = S.editing === d.id
           ? `<input id="edit" value="${esc(d.name)}">`
           : esc(d.name) + (d.area ? `<div class="sub">HA-Bereich: ${esc(d.area)}</div>` : "")
-            + (d.service || d.disabled ? `<div class="sub">${[d.service && "Dienst", d.disabled && "in HA deaktiviert"].filter(Boolean).join(" · ")}</div>` : "");
+            + (d.service || off ? `<div class="sub">${[d.service && "Dienst", off && "in HA deaktiviert"].filter(Boolean).join(" · ")}</div>` : "")
+            + (d.members ? `<button class="grpT" title="Dasselbe Gerät steht über mehrere Integrationen in Home Assistant. Name, Haus, Etage, Raum und Typ gelten für alle Einträge; aufgeklappt hat jeder Eintrag seine eigenen Links.">${S.open.has(d.id) ? "▾" : "▸"} ${d.members.length} Einträge in HA</button>` : "");
+        const memberRow = m => `<tr class="member" data-mid="${m.id}">
+          <td></td>
+          <td class="name" title="Klicken, um nur diesen Eintrag umzubenennen – mit eigenem Namen steht er wieder als eigene Zeile da">${S.editing === "m:" + m.id ? `<input id="edit" value="${esc(m.name)}">` : "↳ " + esc(m.name)
+            + (m.area !== d.area ? `<div class="sub">HA-Bereich: ${esc(m.area || "–")}</div>` : "") + (m.disabled ? `<div class="sub">in HA deaktiviert</div>` : "")}</td>
+          <td></td>
+          ${multiGw ? `<td class="sub">${esc(gwLabel(m.bridge))}</td>` : ""}
+          <td colspan="4"></td>
+          <td class="hide-s hide-l">${esc(m.manufacturer)}<div class="sub">${esc(m.model || m.orig_name)}</div></td>
+          <td class="hide-s hide-m"><code>${esc(addrOf(m) || "–")}</code></td>
+          <td><span class="badge ok">benannt</span></td>
+          <td><div class="links">${openLinks(m)}</div></td>
+          <td></td>
+        </tr>`;
         return `<tr data-id="${d.id}">
           <td><input type="checkbox" class="sel" ${S.sel.has(d.id) ? "checked" : ""}></td>
           <td class="name" title="Klicken zum Bearbeiten">${nameCell}</td>
-          <td>${!d.planned && r && r.id !== undefined && (r.area_id ? r.area_id !== d.area_id : r.name.toLowerCase() !== (d.area || "").toLowerCase()) ? `<button class="btn setArea" title="Nur den Raum in Home Assistant setzen, Name bleibt">Raum setzen</button> ` : ""}${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}${idsDue(d) ? `<div><button class="btn fixIds" title="${esc("Entity-IDs passen nicht zum Namen:\n" + staleIds(d).map(c => c.old + " → " + c.new + (c.reason ? " (" + c.reason + ")" : "")).join("\n"))}">⚠ Entity-IDs angleichen (${staleIds(d).length})</button></div>` : ""}${dupIds(d).length ? `<div><button class="btn dupIds" title="${esc("Diese Entitäten gibt es doppelt – die richtige ID ist schon vergeben:\n" + dupIds(d).map(c => c.old + " ↔ " + c.new).join("\n"))}">⚠ Doppelte Entitäten (${dupIds(d).length})</button></div>` : ""}</td>
-          ${multiGw ? `<td class="sub">${esc(d.planned ? "" : gwLabel(d.bridge))}</td>` : ""}
+          <td>${!d.planned && r && r.id !== undefined && membersOf(d).some(m => areaOff(r, m)) ? `<button class="btn setArea" title="Nur den Raum in Home Assistant setzen, Name bleibt">Raum setzen</button> ` : ""}${s && s !== d.name ? `<span class="sugg">${esc(s)}</span>` : `<span class="sub">${s ? "✓ aktuell" : "–"}</span>`}${idsDue(d) ? `<div><button class="btn fixIds" title="${esc("Entity-IDs passen nicht zum Namen:\n" + staleIds(d).map(c => c.old + " → " + c.new + (c.reason ? " (" + c.reason + ")" : "")).join("\n"))}">⚠ Entity-IDs angleichen (${staleIds(d).length})</button></div>` : ""}${dupIds(d).length ? `<div><button class="btn dupIds" title="${esc("Diese Entitäten gibt es doppelt – die richtige ID ist schon vergeben:\n" + dupIds(d).map(c => c.old + " ↔ " + c.new).join("\n"))}">⚠ Doppelte Entitäten (${dupIds(d).length})</button></div>` : ""}</td>
+          ${multiGw ? `<td class="sub">${esc(d.planned ? "" : membersOf(d).map(m => gwLabel(m.bridge)).join(" + "))}</td>` : ""}
           <td><select class="house">${houseOpts(houseOf(d)?.id)}</select></td>
           <td><select class="floor">${floorOpts(floorOf(d)?.id)}</select></td>
           <td><select class="room">${roomOpts(r?.id)}</select></td>
           <td><select class="type">${typeOpts(t?.id)}</select></td>
           <td class="hide-s hide-l">${esc(d.manufacturer)}<div class="sub">${esc(d.model || d.orig_name)}</div></td>
-          <td class="hide-s hide-m"><code>${esc(addrOf(d) || "–")}</code></td>
+          <td class="hide-s hide-m"><code>${esc(membersOf(d).map(addrOf).find(Boolean) || "–")}</code></td>
           <td><span class="badge ${d.planned ? "plan" : d.is_new ? "new" : "ok"}">${d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}</span></td>
           <td><div class="links">${openLinks(d)}</div></td>
           <td>${s && s !== d.name ? `<button class="btn apply">Übernehmen</button>` : ""}${d.planned ? `<button class="x delP" title="Entfernen">✕</button>` : ""}</td>
-        </tr>`;
+        </tr>` + (d.members && S.open.has(d.id) ? d.members.map(memberRow).join("") : "");
       }).join("") || `<tr><td colspan="13" class="empty">Keine Geräte gefunden.</td></tr>`}</tbody>
     </table></div>`;
 
@@ -1105,9 +1158,10 @@ function renderDevices() {
   $("#bArea", root).onclick = () => assignAreas(rows.filter(d => S.sel.has(d.id)));
   $("#bDel", root).onclick = () => deleteDevices(rows.filter(d => S.sel.has(d.id)));
   $("#bSwap", root).onclick = () => reassignWizard(rows.filter(d => S.sel.has(d.id)));
+  $("#bMerge", root).onclick = () => mergeDevices(selReal);
   $("#bAssign", root).onclick = () => {
     const room = $("#bRoom", root).value, type = $("#bType", root).value, house = $("#bHouse", root)?.value, floor = $("#bFloor", root)?.value;
-    rows.filter(d => S.sel.has(d.id)).forEach(({id}) => { S.meta[id] = {...S.meta[id], ...(room && {room}), ...(type && {type}), ...(house && {house}), ...(floor && {floor})}; });
+    rows.filter(d => S.sel.has(d.id)).forEach(d => setMeta(d, {...(room && {room}), ...(type && {type}), ...(house && {house}), ...(floor && {floor})}));
     persist(); renderDevices();
   };
   $("#fixAll", root) && ($("#fixAll", root).onclick = () => fixEntityIds(staleRows));
@@ -1116,29 +1170,40 @@ function renderDevices() {
     const n = await applyBatch(applicable.map(d => [d, sug.get(d.id)]));
     if (n) toast(n + " Namen übernommen"); renderDevices();
   };
-  root.querySelectorAll("tbody tr[data-id]").forEach(tr => {
-    const d = rows.find(x => x.id === tr.dataset.id);
-    $(".sel", tr).onchange = e => { e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id); renderDevices(); };
-    $(".house", tr) && ($(".house", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], house: e.target.value}; persist(); renderDevices(); });
-    $(".floor", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], floor: e.target.value}; persist(); renderDevices(); };
-    $(".room", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], room: e.target.value}; persist(); renderDevices(); };
-    $(".type", tr).onchange = e => { S.meta[d.id] = {...S.meta[d.id], type: e.target.value}; persist(); renderDevices(); };
-    $(".setArea", tr) && ($(".setArea", tr).onclick = () => assignAreas([d]));
-    $(".fixIds", tr) && ($(".fixIds", tr).onclick = () => fixEntityIds([d]));
-    $(".dupIds", tr) && ($(".dupIds", tr).onclick = () => resolveDuplicates([d]));
+  const wireLinks = (tr, d) => {
     $(".lnk.ha", tr) && ($(".lnk.ha", tr).onclick = e => haNavigate(e, haDevicePath(d)));
     $(".lnk.blink", tr) && ($(".lnk.blink", tr).onclick = async () => { try { const r = await api.identify(d); toast(`💡 ${d.name} blinkt (${r.how})`); } catch (e) { toast("Blinken nicht möglich: " + e.message); } });
     $(".lnk.z2m", tr) && ($(".lnk.z2m", tr).onclick = e => openZ2m(e, z2mLink(d)));
     $(".lnk.off", tr) && ($(".lnk.off", tr).onclick = () => showTab("gateways"));
+  };
+  const startEdit = key => { if (S.editing !== key) { S.editing = key; renderDevices(); const i = $("#edit"); i.focus(); i.select(); } };
+  root.querySelectorAll("tbody tr[data-id]").forEach(tr => {
+    const d = rows.find(x => x.id === tr.dataset.id);
+    $(".sel", tr).onchange = e => { e.target.checked ? S.sel.add(d.id) : S.sel.delete(d.id); renderDevices(); };
+    $(".house", tr) && ($(".house", tr).onchange = e => { setMeta(d, {house: e.target.value}); persist(); renderDevices(); });
+    $(".floor", tr).onchange = e => { setMeta(d, {floor: e.target.value}); persist(); renderDevices(); };
+    $(".room", tr).onchange = e => { setMeta(d, {room: e.target.value}); persist(); renderDevices(); };
+    $(".type", tr).onchange = e => { setMeta(d, {type: e.target.value}); persist(); renderDevices(); };
+    $(".setArea", tr) && ($(".setArea", tr).onclick = () => assignAreas([d]));
+    $(".fixIds", tr) && ($(".fixIds", tr).onclick = () => fixEntityIds([d]));
+    $(".dupIds", tr) && ($(".dupIds", tr).onclick = () => resolveDuplicates([d]));
+    wireLinks(tr, d);
     $(".apply", tr) && ($(".apply", tr).onclick = async () => { if (await applyBatch([[d, sug.get(d.id)]])) toast("Name übernommen"); renderDevices(); });
     $(".delP", tr) && ($(".delP", tr).onclick = () => { S.planned = S.planned.filter(p => p.id !== d.id); persist(); renderDevices(); });
-    $(".name", tr).onclick = () => { if (S.editing !== d.id) { S.editing = d.id; renderDevices(); const i = $("#edit"); i.focus(); i.select(); } };
+    $(".grpT", tr) && ($(".grpT", tr).onclick = e => { e.stopPropagation(); S.open.has(d.id) ? S.open.delete(d.id) : S.open.add(d.id); renderDevices(); });
+    $(".name", tr).onclick = () => startEdit(d.id);
+  });
+  root.querySelectorAll("tbody tr[data-mid]").forEach(tr => {
+    const m = S.devices.find(x => x.id === tr.dataset.mid);
+    wireLinks(tr, m);
+    $(".name", tr).onclick = () => startEdit("m:" + m.id);
   });
   const edit = $("#edit");
   if (edit) {
     const done = async save => {
       const id = S.editing; S.editing = null;
-      const d = allRows().find(x => x.id === id), v = edit.value.trim();
+      // "m:<id>": nur dieser Eintrag eines Geräts mit mehreren Einträgen
+      const d = id.startsWith("m:") ? S.devices.find(x => x.id === id.slice(2)) : allRows().find(x => x.id === id), v = edit.value.trim();
       if (save && v && v !== d.name) await applyBatch([[d, v]]);
       renderDevices();
     };
@@ -1241,9 +1306,10 @@ async function refreshFromHA(quiet = false) {
 
 /** Bereich lokal nachziehen; neu angelegte Bereiche mit dem Raum verknüpfen. */
 function adoptAreas(items) {
+  const rowOf = new Map(allRows().flatMap(r => membersOf(r).map(m => [m.id, r]))); // Raum der Zeile – bei mehreren Einträgen der gemeinsame
   for (const it of items || []) {
     const dev = S.devices.find(x => x.id === it.device_id); if (!dev || !it.area_id) continue;
-    const room = roomOf(dev); dev.area_id = it.area_id; dev.area = room?.name || dev.area;
+    const room = roomOf(rowOf.get(dev.id) || dev); dev.area_id = it.area_id; dev.area = room?.name || dev.area;
     if (room && !room.area_id) { room.area_id = it.area_id; S.areas.push({id: it.area_id, name: room.name, floor_id: ""}); }
   }
   persist();
@@ -1251,7 +1317,7 @@ function adoptAreas(items) {
 
 /** Weist Geräte ihrem gewählten Raum als Bereich in Home Assistant zu – ohne Umbenennen. */
 async function assignAreas(devs) {
-  const list = devs.filter(d => !d.planned && roomOf(d)).map(d => [d, d.name]);
+  const list = devs.filter(d => !d.planned && roomOf(d)).flatMap(d => membersOf(d).map(m => [m, m.name, d]));
   if (!list.length) { toast("Kein Gerät mit gewähltem Raum"); return; }
   try {
     const plan = await api.planAreas(list);
@@ -1341,6 +1407,7 @@ function confirmDelete(real, planned, plan) {
 
 /** Löscht Geräte restlos (Zigbee2MQTT/ZHA/Matter und Home Assistant); geplante Geräte verschwinden nur aus der Liste. */
 async function deleteDevices(devs) {
+  devs = devs.flatMap(membersOf);
   const real = devs.filter(d => !d.planned), planned = devs.filter(d => d.planned);
   if (!planned.length && !real.some(d => DELETABLE.has(d.source))) { toast(NOT_DELETABLE); return; }
   let plan = {devices: [], usages: [], unreadable: 0};
@@ -1364,8 +1431,11 @@ async function deleteDevices(devs) {
   renderDevices();
 }
 
-/** items: [[device, neuerName], …]. Gibt die Anzahl umbenannter Geräte zurück. */
+/** items: [[device, neuerName], …] – bei einem Gerät mit mehreren Einträgen bekommen alle den Namen (optional dritter Wert:
+ *  die Zeile, deren Raum gilt). Gibt die Anzahl umbenannter Geräte zurück. */
 async function applyBatch(items) {
+  const count = items.length;
+  items = items.flatMap(([d, name, row = d]) => membersOf(d).map(m => [m, name, row]));
   const real = items.filter(([d]) => !d.planned);
   for (const [d, name] of items.filter(([d]) => d.planned)) S.planned.find(p => p.id === d.id).name = name;
   if (real.length) {
@@ -1383,7 +1453,41 @@ async function applyBatch(items) {
       await showChecks(res.checks || [], {items: res.items || api.payload(real), renamed: res.renamed_entities || [], opts: api.opts()}, res.errors || []);
     } catch (e) { toast("Fehler: " + e.message); return 0; }
   }
-  persist(); return items.length;
+  persist(); return count;
+}
+
+/** „🔗 Zusammenfassen“: Einträge, die zum selben Gerät gehören (z. B. ein Tablet über die Mobile App und den Fully Kiosk Browser),
+ *  bekommen denselben Namen und dieselben Zuordnungen – danach sind sie eine Zeile. Einträge derselben Integration sind zwei Geräte. */
+async function mergeDevices(sel) {
+  const all = sel.flatMap(membersOf);
+  if (sel.length < 2) { toast("Mindestens 2 Einträge auswählen"); return; }
+  if (new Set(all.map(d => d.source)).size < all.length) { toast("Zwei Einträge derselben Integration sind zwei verschiedene Geräte – zusammenfassen geht nur über verschiedene Integrationen"); return; }
+  const keep = await new Promise(resolve => {
+    const dlg = document.createElement("dialog"), first = Math.max(0, sel.findIndex(d => !d.is_new));
+    dlg.style.cssText = "max-width:620px;width:92%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
+    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">🔗 ${all.length} Einträge zu einem Gerät zusammenfassen</h2>
+      <p class="sub">Für ein Gerät, das über mehrere Integrationen in Home Assistant steht. Alle Einträge bekommen denselben Namen und erscheinen danach als eine Zeile; Haus, Etage, Raum, Typ und Umbenennen gelten dann für alle. Welcher Name bleibt?</p>
+      <div class="preview" style="line-height:1.9">${sel.map((d, i) => `<label style="display:block"><input type="radio" name="keep" value="${i}"${i === first ? " checked" : ""}> <b>${esc(d.name)}</b>
+        <span class="sub">${esc(srcName(d))}${d.manufacturer || d.model ? " · " + esc([d.manufacturer, d.model].filter(Boolean).join(" ")) : ""}${d.is_new ? " · neu" : ""}</span></label>`).join("")}</div>
+      <p class="sub" style="margin:10px 0 0">Wieder trennen: Gerät aufklappen („▸ … Einträge in HA“) und einen Eintrag umbenennen.</p>
+      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="no">Abbrechen</button><button class="btn primary" id="yes">Zusammenfassen</button></div>`;
+    document.body.appendChild(dlg); dlg.showModal();
+    const end = v => { dlg.close(); dlg.remove(); resolve(v); };
+    $("#no", dlg).onclick = () => end(null);
+    $("#yes", dlg).onclick = () => end(sel[+$("input[name=keep]:checked", dlg).value]);
+    dlg.oncancel = () => end(null);
+  });
+  if (!keep) return;
+  // Zuordnungen zusammenlegen (die des Namensgebers zählen) – vorher, damit der Raum beim Umbenennen für alle gilt
+  const before = clone(S.meta), meta = {};
+  for (const d of [...sel.filter(d => d !== keep), keep]) for (const [k, v] of Object.entries(S.meta[d.id] || {})) if (v) meta[k] = v;
+  for (const d of all) S.meta[d.id] = {...meta};
+  // neue Einträge bekommen den Namen auch, wenn er schon passt – erst ein eigener Name in HA macht sie zu „benannt“
+  const items = all.filter(d => d.name !== keep.name || d.is_new).map(d => [d, keep.name, keep]);
+  if (items.length && !await applyBatch(items)) { S.meta = before; renderDevices(); return; }
+  S.sel.clear(); persist();
+  toast(`„${keep.name}“: ${all.length} Einträge zusammengefasst`);
+  renderDevices();
 }
 
 /** „Verweise prüfen“: Automationen, Skripte, Szenen und Dashboards, die Entitäten nennen, die es nicht (mehr) gibt –
@@ -1466,8 +1570,10 @@ async function checkReferences() {
  *  so bleibt es immer eine gültige Zuordnung (Tausch oder Ringtausch). Danach Vorschau und Ausführung über den Server.
  *  Automationen, Szenen und Dashboards bleiben beim Namen und steuern danach das Gerät, das am richtigen Platz so heißt. */
 async function reassignWizard(sel) {
-  const devs = sel.filter(d => !d.planned && !d.is_new);
-  if (devs.length < 2) { toast("Mindestens 2 benannte Geräte auswählen"); return; }
+  // Geräte mit mehreren Einträgen (z. B. Tablets) tauschen nicht mit: jeder neue Name darf nur einmal vergeben werden
+  const devs = sel.filter(d => !d.planned && !d.is_new && !d.members), multi = sel.filter(d => d.members).length;
+  if (devs.length < 2) { toast(multi ? "Geräte mit mehreren Einträgen lassen sich nicht neu zuordnen – mindestens 2 andere benannte Geräte auswählen" : "Mindestens 2 benannte Geräte auswählen"); return; }
+  if (multi) toast(multi + " Gerät(e) mit mehreren Einträgen übersprungen");
   const byNameNat = (a, b) => a.localeCompare(b, "de", {numeric: true});
   const names = devs.map(d => d.name).sort(byNameNat), assign = new Map(devs.map(d => [d.id, d.name]));
   const ownerOf = name => devs.find(d => d.name === name); // wer den Namen bisher trägt
@@ -1557,6 +1663,7 @@ async function reassignWizard(sel) {
  *  vom früheren Namen). Zeigt beide mit Zustand und Verwendung; verwaiste oder deaktivierte werden entfernt, Verweise auf die alte ID
  *  zeigen danach auf die neue. Aktive Entitäten entfernt das Add-on nie. */
 async function resolveDuplicates(devs) {
+  devs = devs.flatMap(membersOf);
   const pairs = devs.flatMap(d => dupIds(d).map(c => ({...c, device: d})));
   if (!pairs.length) return;
   const kinds = {automation: "Automation", script: "Skript", scene: "Szene", dashboard: "Dashboard"};
@@ -1610,7 +1717,7 @@ async function resolveDuplicates(devs) {
 /** Benennt die Entity-IDs benannter Geräte nach ihrem Namen um (z. B. light.wohnzimmer_s2_wzel03 → light.s2_wzel_lsp03) –
  *  Gerätename und Bereich bleiben. Verweise in Automationen/Dashboards/YAML/Node-RED nach den Haken in der Liste. */
 async function fixEntityIds(devs) {
-  const list = devs.filter(d => staleIds(d).length).map(d => [d, d.name]);
+  const list = devs.flatMap(membersOf).filter(d => staleIds(d).length).map(d => [d, d.name]);
   if (!list.length) return;
   const extra = {entities_only: true, rename_entities: true, rename_z2m: false, set_area: false, skip_names: true};
   try {
@@ -2090,7 +2197,7 @@ function renderExport() {
         <input type="file" id="bkFile" accept="application/json" hidden></div>
       <div id="bkBox"><p class="sub">Lade Sicherungen …</p></div></div>
   </div>`;
-  const rows = () => allRows().map(d => ({name: d.name, kennung: addrOf(d), quelle: srcName(d), hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area, haus: houseOf(d)?.name || "", etage: floorOf(d)?.name || "", raum: roomOf(d)?.name || "", typ: typeOf(d)?.name || "", status: d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}));
+  const rows = () => allRows().map(d => ({name: d.name, kennung: membersOf(d).map(addrOf).filter(Boolean).join(", "), quelle: srcName(d), hersteller: d.manufacturer, modell: d.model, ha_bereich: d.area, haus: houseOf(d)?.name || "", etage: floorOf(d)?.name || "", raum: roomOf(d)?.name || "", typ: typeOf(d)?.name || "", status: d.planned ? "geplant" : d.is_new ? "neu" : "benannt"}));
   $("#csv").onclick = () => download("geraete.csv", toCsv(rows()), "text/csv");
   $("#json").onclick = () => download("geraete.json", JSON.stringify(rows(), null, 2), "application/json");
   $("#sExp").onclick = () => download("namensschema.json", JSON.stringify(S.scheme, null, 2), "application/json");

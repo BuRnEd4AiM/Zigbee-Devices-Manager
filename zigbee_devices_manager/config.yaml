@@ -1,5 +1,5 @@
 name: Gerätemanager
-version: "0.17.0"
+version: "0.18.0"
 slug: zigbee_devices_manager
 description: Alle Geräte aus Home Assistant zentral benennen – Zigbee, Matter, Shelly und jede andere Integration – mit Namensschema, Kürzeln und automatischem Hochzählen.
 url: https://github.com/BuRnEd4AiM/Zigbee-Devices-Manager

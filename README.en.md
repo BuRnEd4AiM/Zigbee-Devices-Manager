@@ -81,6 +81,7 @@ If you installed it as "Zigbee Devices Manager", the next update brings the new 
 <summary><b>Device list, filters and naming scheme</b></summary>
 
 - List of all devices from Home Assistant (*Settings → Devices & services → Devices*), grouped by integration or gateway; the identifier is the IEEE (Zigbee), node ID (Matter) or MAC address (Wi-Fi/LAN, e.g. Shelly). Services such as sun or weather forecast are hidden ("Dienste zeigen" shows them), devices disabled in HA are marked.
+- **One device, one row:** if a device appears in HA through several integrations (e.g. a tablet via the Mobile App and Fully Kiosk Browser) under the same name, it is listed once – expandable, with the filter "Mehrfach eingetragen". Name, room and type apply to all entries. Entries with different names can be joined with "🔗 Zusammenfassen".
 - Inline rename, search, filters "new", "named", "doesn't fit", "planned"; plus filters by house, floor, room and type (with counts, "ohne Raum/Typ" finds gaps). Bulk actions only affect the visible devices.
 - **Configurable naming scheme**, e.g. `{room}_{type}_{nr}` → `WZ_LP_01`
   - Abbreviations for rooms and device types (sorted alphabetically by name)
