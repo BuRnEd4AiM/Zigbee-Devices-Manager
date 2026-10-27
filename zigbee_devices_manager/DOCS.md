@@ -2,6 +2,8 @@
 
 Nach dem Start erscheint in der Seitenleiste **„Gerätemanager“**. Aufgelistet sind alle Geräte aus Home Assistant – Zigbee (Zigbee2MQTT, ZHA), Matter und jede andere Integration wie Shelly oder ESPHome. Dienste (Sonne, Wettervorhersage, Add-ons …) blendet „Dienste zeigen“ ein.
 
+Steht ein Gerät über mehrere Integrationen in Home Assistant (z. B. ein Tablet über die Mobile App und den Fully Kiosk Browser) und heißt dort gleich, erscheint es als **eine Zeile**; „▸ 2 Einträge in HA“ klappt die Einträge auf. Mit unterschiedlichen Namen: beide auswählen → **„🔗 Zusammenfassen“**.
+
 ## Schnellstart
 
 1. **Namensschema** wählen (Reiter „Namensschema“) – z. B. „H0, H1, S2 …“ für Haus-Buchstabe + Etage. Räume und Etagen aus Home Assistant werden übernommen; Räume und Typen stehen alphabetisch.

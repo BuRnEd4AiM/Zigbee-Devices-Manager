@@ -1,5 +1,15 @@
 # Änderungen
 
+## 0.18.0
+
+*27.10.2026*
+
+- **Ein Gerät, eine Zeile:** Steht ein Gerät über mehrere Integrationen in Home Assistant – z. B. ein Tablet über die Mobile App *und* den Fully Kiosk Browser –, zeigt die Liste es nur noch einmal. Erkannt wird das am gleichen Namen bei verschiedenen Integrationen; die Spalte „Integration“ nennt beide („Fully Kiosk Browser + Mobile App“). Gleicher Name in *derselben* Integration sind dagegen zwei Geräte und bleiben getrennt.
+- **„▸ 2 Einträge in HA“** unter dem Namen klappt die Einträge auf – jeder mit Hersteller/Modell, Kennung und eigenen Links (⌂ HA, 💡). Neuer Filter **„Mehrfach eingetragen“** zeigt nur solche Geräte.
+- Haus, Etage, Raum, Typ, Umbenennen, „Raum in HA setzen“ und „Entity-IDs angleichen“ wirken auf **alle Einträge** des Geräts – beide behalten denselben Namen.
+- **Neu: „🔗 Zusammenfassen“** für Einträge mit unterschiedlichen Namen (z. B. ein neues Tablet, das die Mobile App „SM-T500“ und Fully „Galaxy Tab A7“ nennt): beide auswählen, Namen wählen – danach sind sie eine Zeile. **Wieder trennen:** aufklappen und einen Eintrag umbenennen.
+- Export: eine Zeile je Gerät, mit den Kennungen aller Einträge. „💡 Neu zuordnen“ lässt Geräte mit mehreren Einträgen aus.
+
 ## 0.17.0
 
 *27.10.2026*
