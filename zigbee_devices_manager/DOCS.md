@@ -16,6 +16,10 @@ Steht ein Gerät über mehrere Integrationen in Home Assistant (z. B. ein Tablet
 - **Doppelte Entitäten** – die richtige ID ist schon vergeben (Altlast vom früheren Namen): verwaiste oder deaktivierte Altlasten entfernen.
 - **🔍 Verweise prüfen** – Automationen, Szenen und Dashboards mit Entitäten, die es nicht mehr gibt: per Suche ersetzen oder aus Szenen entfernen.
 
+## Home Assistant 2026.11
+
+Ab 2026.11 zeigt Home Assistant Namen als **Gerät + Entität** und Bereich/Etage dazu; Entity-IDs bleiben. **„🔤 Namen prüfen“** zeigt eigene Entitätsnamen heute und danach, schlägt vor, veraltete (mit früherem Gerätenamen) und überflüssige zurückzusetzen, und ordnet Bereiche ohne Etage einer Etage zu. Am besten **vor** dem Update einmal ausführen. Beim Umbenennen ziehen eigene Entitätsnamen mit dem Gerätenamen mit. Kind-Geräte (z. B. Dosen einer Steckdosenleiste) stehen mit „Teil von …“ in der Liste.
+
 ## Vertauschte Spots
 
 Geräte auswählen → **„💡 Neu zuordnen“**: Die Geräte blinken nacheinander, du wählst jeweils den Namen des Platzes. Namen, Entity-IDs und Raum wechseln mit; Automationen, Szenen und Dashboards bleiben unverändert und steuern danach den richtigen Platz. „💡“ in der Zeile lässt ein einzelnes Gerät blinken.

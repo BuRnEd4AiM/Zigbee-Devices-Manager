@@ -756,3 +756,158 @@ class AllDevices(unittest.IsolatedAsyncioTestCase):
         finally:
             for k, v in saved.items():
                 setattr(server, k, v)
+
+
+class EntityNames2026(unittest.TestCase):
+    """Home Assistant 2026.11: Anzeigename = Gerät + Entität. Eigene Entitätsnamen ziehen beim Umbenennen mit."""
+
+    def test_strip_name_prefix(self):
+        self.assertEqual(server.strip_name_prefix("S2-WZEL-LSP03 Helligkeit", "s2-wzel-lsp03"), "Helligkeit")
+        self.assertEqual(server.strip_name_prefix("S2-WZEL-LSP03", "S2-WZEL-LSP03"), "")
+        self.assertIsNone(server.strip_name_prefix("S2-WZEL-LSP031 Helligkeit", "S2-WZEL-LSP03"))  # kein Trenner dahinter
+        self.assertIsNone(server.strip_name_prefix("Helligkeit", "S2-WZEL-LSP03"))
+
+    def names(self, v2, name="WZ_LP_05 Helligkeit", old="WZ_LP_05", new="S2-WZEL-LSP03"):
+        entities = [{"entity_id": "number.x", "device_id": "d1", "name": name, "platform": "mqtt", "unique_id": "u1"},
+                    {"entity_id": "light.x", "device_id": "d1", "name": None, "platform": "mqtt", "unique_id": "u2"}]
+        items = [{"device_id": "d1", "name": new, "old_name": old, "orig_name": ""}]
+        return [(c["old"], c["new"]) for c in server.entity_name_changes(items, entities, v2)]
+
+    def test_before_2026_11_the_whole_name_follows(self):
+        self.assertEqual(self.names(False), [("WZ_LP_05 Helligkeit", "S2-WZEL-LSP03 Helligkeit")])
+        self.assertEqual(self.names(False, name="WZ_LP_05"), [("WZ_LP_05", "S2-WZEL-LSP03")])
+        self.assertEqual(self.names(False, name="Leselicht"), [])  # eigener Name ohne Gerätenamen bleibt
+
+    def test_from_2026_11_only_the_entity_part_remains(self):
+        self.assertEqual(self.names(True), [("WZ_LP_05 Helligkeit", "Helligkeit")])
+        self.assertEqual(self.names(True, name="WZ_LP_05"), [("WZ_LP_05", None)])
+        self.assertEqual(self.names(True, name="S2-WZEL-LSP03 Helligkeit"), [("S2-WZEL-LSP03 Helligkeit", "Helligkeit")])
+        self.assertEqual(self.names(True, name="Helligkeit"), [])
+
+    def test_old_name_that_starts_the_new_one(self):
+        """Alter Name „S2-WZEL“ ist der Anfang des neuen – ein schon passender Name wird nicht verdoppelt."""
+        self.assertEqual(self.names(False, name="S2-WZEL-LSP03 Helligkeit", old="S2-WZEL"), [])
+        self.assertEqual(self.names(True, name="S2-WZEL-LSP03 Helligkeit", old="S2-WZEL"), [("S2-WZEL-LSP03 Helligkeit", "Helligkeit")])
+
+    def test_device_not_renamed_keeps_names(self):
+        self.assertEqual(self.names(True, old="S2-WZEL-LSP03"), [])
+
+    def test_report(self):
+        devices = [{"id": "d1", "name": "KAJPLATS", "name_by_user": "S2-WZEL-LSP03"}]
+        entities = [{"entity_id": f"sensor.e{i}", "device_id": "d1", "name": n} for i, n in enumerate(
+            ["S2-WZEL-LSP03 Helligkeit", "01 S2 Lichtschalter Battery", "Linkquality", "Leselicht"])]
+        originals = {"sensor.e1": "Battery", "sensor.e2": "Linkquality"}
+        rows = {r["entity_id"]: r for r in server.name_report(entities, devices, originals, False)}
+        self.assertEqual({k: r["kind"] for k, r in rows.items()}, {"sensor.e0": "ok", "sensor.e1": "old_dev", "sensor.e2": "same", "sensor.e3": "custom"})
+        self.assertEqual(rows["sensor.e0"]["after"], "S2-WZEL-LSP03 Helligkeit")
+        self.assertEqual((rows["sensor.e1"]["after"], rows["sensor.e1"]["prefix"], rows["sensor.e1"]["new"]), ("S2-WZEL-LSP03 Battery", "01 S2 Lichtschalter", None))
+        self.assertEqual(rows["sensor.e3"]["after"], "S2-WZEL-LSP03 Leselicht")
+        # nach dem Update: ein Name, der noch mit dem Gerätenamen beginnt, ist doppelt
+        after = {r["entity_id"]: r for r in server.name_report(entities, devices, originals, True)}
+        self.assertEqual((after["sensor.e0"]["kind"], after["sensor.e0"]["new"], after["sensor.e0"]["now"]),
+                         ("dup", "Helligkeit", "S2-WZEL-LSP03 S2-WZEL-LSP03 Helligkeit"))
+
+    def test_floor_before_area_in_entity_id(self):
+        """Falls Home Assistant auch die Etage vor neue IDs setzt: <Etage>_<Bereich>_<Gerät> wird als alter Name erkannt."""
+        areas = [{"area_id": "wz", "name": "Wohnzimmer", "floor_id": "og2", "floor_name": "2. Etage"}]
+        entities = [ent("light.2_etage_wohnzimmer_wzel03", "d1")]
+        items = [{"device_id": "d1", "name": "S2-WZEL-LSP03", "old_name": "WZEL03", "orig_name": ""}]
+        changes, _, _ = server.entity_changes(items, entities, [dev("d1", "wz")], areas)
+        self.assertEqual(mapping(changes), {"light.2_etage_wohnzimmer_wzel03": "light.s2_wzel_lsp03"})
+
+
+class ChildDevices(unittest.TestCase):
+    """Kind-Geräte (2026.11), z. B. die Dosen einer Zigbee2MQTT-Steckdosenleiste: Gateway bleibt die Bridge, keine eigene IEEE."""
+    DEVICES = [
+        {"id": "bridge", "name": "Zigbee2MQTT Bridge", "identifiers": [["mqtt", "zigbee2mqtt_bridge_0x00124b0030aa0000"]]},
+        {"id": "strip", "name": "S2-WZEL-SD01", "identifiers": [["mqtt", "zigbee2mqtt_0x680ae2fffe1a0009"]], "via_device_id": "bridge"},
+        {"id": "l1", "name": "S2-WZEL-SD01 L1", "identifiers": [["mqtt", "zigbee2mqtt_0x680ae2fffe1a0009_l1"]], "via_device_id": "strip"},
+    ]
+
+    def test_child_of_z2m_device(self):
+        out, _ = server.collect_devices(self.DEVICES, AREAS)
+        by_id = {d["id"]: d for d in out}
+        self.assertEqual((by_id["l1"]["bridge"], by_id["l1"]["ieee"], by_id["l1"]["part_of"]), ("bridge", "", "S2-WZEL-SD01"))
+        self.assertEqual((by_id["strip"]["bridge"], by_id["strip"]["ieee"]), ("bridge", "0x680ae2fffe1a0009"))
+        self.assertNotIn("part_of", by_id["strip"])
+
+    def test_child_is_not_deleted_alone(self):
+        sources = {"l1": "part", "strip": "z2m"}
+        self.assertIn("Kind-Gerät", server.delete_blocked({"device_id": "l1"}, {}, sources))
+        self.assertEqual(server.delete_blocked({"device_id": "strip", "source": "z2m"}, {}, sources), "")
+
+
+class ApplyEntityNames(unittest.IsolatedAsyncioTestCase):
+    """Umbenennen über Home Assistant: eigene Entitätsnamen ziehen mit – je nach Version ganz oder nur der Entitäts-Teil."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = {k: getattr(server, k) for k in ("ha", "safe_backup", "collect_usages", "backup_root")}
+        server.backup_root = lambda: Path(self.tmp.name)
+        self.version = "2026.10.2"
+        self.device = {"id": "d1", "name": "KAJPLATS", "name_by_user": "WZ_LP_05", "identifiers": [["matter", "deviceid_AB-1-MatterNodeDevice"]]}
+        self.entities = [{"entity_id": "light.wz_lp_05", "device_id": "d1", "platform": "matter", "unique_id": "u1", "name": None},
+                         {"entity_id": "select.wz_lp_05_power_on", "device_id": "d1", "platform": "matter", "unique_id": "u2",
+                          "name": "WZ_LP_05 Einschaltverhalten"}]
+
+        async def ha(cmds):
+            out = []
+            for c in cmds:
+                t = c["type"]
+                if t == "get_config":
+                    out.append({"version": self.version})
+                elif t == "config/entity_registry/list":
+                    out.append([dict(e) for e in self.entities])
+                elif t == "config/device_registry/list":
+                    out.append([dict(self.device)])
+                elif t in ("config/area_registry/list", "config/floor_registry/list"):
+                    out.append([])
+                elif t == "config/device_registry/update":
+                    self.device.update({k: v for k, v in c.items() if k == "name_by_user"}); out.append({})
+                elif t == "config/entity_registry/update":
+                    e = next(e for e in self.entities if e["entity_id"] == c["entity_id"])
+                    if "new_entity_id" in c:
+                        e["entity_id"] = c["new_entity_id"]
+                    if "name" in c:
+                        e["name"] = c["name"]
+                    out.append({})
+            return out
+
+        async def noop(*a, **k):
+            return None
+
+        async def no_usages(*a, **k):
+            return [], 0, []
+
+        server.ha, server.safe_backup, server.collect_usages = ha, noop, no_usages
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(server, k, v)
+        self.tmp.cleanup()
+
+    async def rename(self):
+        import json
+        body = {"items": [{"device_id": "d1", "name": "S2-WZEL-LSP03", "old_name": "WZ_LP_05", "orig_name": "KAJPLATS", "source": "matter"}],
+                "rename_entities": True, "rename_z2m": False, "update_references": False}
+
+        class Req:
+            async def json(self):
+                return json.loads(json.dumps(body))
+        return json.loads((await server.apply(Req())).text)
+
+    async def test_before_2026_11(self):
+        res = await self.rename()
+        self.assertTrue(res["ok"], res)
+        self.assertEqual([(e["entity_id"], e["name"]) for e in self.entities],
+                         [("light.s2_wzel_lsp03", None), ("select.s2_wzel_lsp03_power_on", "S2-WZEL-LSP03 Einschaltverhalten")])
+        self.assertEqual(res["renamed_names"], [{"entity_id": "select.s2_wzel_lsp03_power_on", "old": "WZ_LP_05 Einschaltverhalten",
+                                                 "new": "S2-WZEL-LSP03 Einschaltverhalten"}])
+        self.assertTrue((Path(self.tmp.name) / "entitaetsnamen-verlauf.json").exists())
+
+    async def test_from_2026_11(self):
+        self.version = "2026.11.0"
+        res = await self.rename()
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(self.entities[1]["name"], "Einschaltverhalten")

@@ -1,5 +1,18 @@
 # Änderungen
 
+## 0.19.0
+
+*08.11.2026*
+
+**Vorbereitet auf Home Assistant 2026.11.** Ab 2026.11 setzt Home Assistant den Gerätenamen selbst vor den Namen einer Entität („Gerät + Entität“) und zeigt Bereich und Etage dazu. Entity-IDs ändern sich dadurch nicht. Diese Version läuft mit älteren Versionen und mit 2026.11 – am besten vor dem Update installieren und einmal „🔤 Namen prüfen“ ansehen.
+
+- **Neu: „🔤 Namen prüfen (2026.11)“** in der Geräteliste. Zeigt eigene Entitätsnamen – wie sie heute aussehen und wie ab 2026.11. Vorschläge zum Aufräumen (angehakt): Namen, die mit einem **früheren Gerätenamen** beginnen (aus „01 S2 Lichtschalter Battery“ würde sonst „S2-WZEL-TAS01 01 S2 Lichtschalter Battery“), und Namen, die nur den Namen der Integration wiederholen. Eigene Namen wie „Leselicht“ stehen aufklappbar daneben und bleiben, wenn man nichts anhakt. Vorher wird gesichert; jede Änderung steht in `/config/zigbee_devices_manager/entitaetsnamen-verlauf.json`.
+- **Bereiche ohne Etage:** Derselbe Dialog listet Bereiche mit Geräten, die keiner Etage zugeordnet sind, und schlägt die Etage aus dem Namensschema vor. Neu angelegte Bereiche („Raum als Bereich in HA setzen“) bekommen ihre Etage jetzt gleich mit.
+- **Eigene Entitätsnamen ziehen beim Umbenennen mit:** Beginnt der Name einer Entität mit dem alten Gerätenamen („WZ_LP_05 Helligkeit“), wird er angepasst – vor 2026.11 zu „S2-WZEL-LSP03 Helligkeit“, ab 2026.11 zu „Helligkeit“ (Home Assistant setzt den Gerätenamen selbst davor). Die Vorschau zeigt die Änderungen; das gilt auch für „💡 Neu zuordnen“.
+- **„🔍 Verweise prüfen“ sucht auch nach Gerät und Bereich** statt nur nach dem Anzeigenamen (`friendly_name`), den Home Assistant ab 2026.11 anders zusammensetzt und später abschaffen will.
+- **Kind-Geräte** (neu in 2026.11, z. B. die Dosen einer Steckdosenleiste): erscheinen als eigene Zeile mit „Teil von …“, werden nur in Home Assistant benannt und nie allein aus dem Zigbee-Netz abgemeldet (das würde das ganze Gerät entfernen). Gateway bleibt die Zigbee2MQTT-Bridge.
+- Entity-IDs mit **Etage und Bereich davor** (`light.2_etage_wohnzimmer_wzel03`) werden beim Umbenennen ebenfalls als alter Name erkannt.
+
 ## 0.18.0
 
 *27.10.2026*

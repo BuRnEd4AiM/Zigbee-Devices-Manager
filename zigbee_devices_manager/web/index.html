@@ -281,7 +281,7 @@ const api = {
   payload(list, forceArea = false) {
     return list.map(([d, name, row = d]) => { const room = roomOf(row);
       return {device_id: d.id, name, old_name: d.name, orig_name: d.orig_name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || "",
-        ...((S.setArea || forceArea) && room ? {area_id: room.area_id || "", area_name: room.name, current_area_id: d.area_id || "", current_area: d.area || ""} : {})}; });
+        ...((S.setArea || forceArea) && room ? {area_id: room.area_id || "", area_name: room.name, floor_id: floorOf(row)?.floor_id || "", current_area_id: d.area_id || "", current_area: d.area || ""} : {})}; });
   },
   opts() { const on = S.renameEntities; return {set_area: S.setArea, rename_z2m: S.renameZ2m, rename_entities: on, update_references: on && S.updateRefs, update_yaml: on && S.updateYaml, update_nodered: on && S.updateNodered}; },
   async post(path, body) {
@@ -418,6 +418,31 @@ const api = {
     }
     return this.post("api/entities/dedupe", {pairs, update_yaml: S.renameEntities && S.updateYaml, update_nodered: S.renameEntities && S.updateNodered});
   },
+  // ---- Namen prüfen (Home Assistant 2026.11: Anzeigename = Gerät + Entität) ----
+  async names() {
+    if (this.demo) {
+      const fixed = (() => { try { return JSON.parse(localStorage.getItem("zdm-demo-entnames") || "[]"); } catch (e) { return []; } })();
+      const entities = [
+        {entity_id: "sensor.wz_lp_05_battery", device: "WZ_LP_05", name: "01 S2 Lichtschalter Battery", original: "Battery", kind: "old_dev", prefix: "01 S2 Lichtschalter",
+          now: "01 S2 Lichtschalter Battery", after: "WZ_LP_05 Battery", new: null, suggest: true},
+        {entity_id: "sensor.s2_wzel_lsp01_linkquality", device: "S2-WZEL-LSP01", name: "Linkquality", original: "Linkquality", kind: "same",
+          now: "Linkquality", after: "S2-WZEL-LSP01 Linkquality", new: null, suggest: true},
+        {entity_id: "light.buero_stehlampe", device: "Büro Stehlampe", name: "Leselicht", original: "", kind: "custom", now: "Leselicht",
+          after: "Büro Stehlampe Leselicht", reset: "Büro Stehlampe", new: null, suggest: false},
+        {entity_id: "select.s2_wzel_lsp03_power_on_behavior", device: "S2-WZEL-LSP03", name: "S2-WZEL-LSP03 Einschaltverhalten", original: "Power-on behavior", kind: "ok",
+          now: "S2-WZEL-LSP03 Einschaltverhalten", after: "S2-WZEL-LSP03 Einschaltverhalten", suggest: false}].filter(r => !fixed.includes(r.entity_id));
+      const areas = fixed.includes("area:area_garten") ? [] : [{id: "area_garten", name: "Garten"}];
+      return {v2: false, ha_version: "2026.10", entities, areas_without_floor: areas, floors: Object.fromEntries(S.haFloors.map(f => [f.id, f.name]))};
+    }
+    const r = await fetch("api/names"); if (!r.ok) throw new Error(await r.text()); return r.json();
+  },
+  async namesFix(entities, areas) {
+    if (this.demo) {
+      try { const f = JSON.parse(localStorage.getItem("zdm-demo-entnames") || "[]"); localStorage.setItem("zdm-demo-entnames", JSON.stringify([...f, ...entities.map(e => e.entity_id), ...areas.map(a => "area:" + a.area_id)])); } catch (e) {}
+      return {done: entities, areas_done: areas.map(a => a.area_id), errors: []};
+    }
+    return this.post("api/names/fix", {entities, areas});
+  },
   // ---- Löschen: Vorschau, Ausführung, erneute Prüfung ----
   delPayload: list => list.map(d => ({device_id: d.id, name: d.name, source: d.source, ieee: d.ieee, base_topic: gwOf(d).topic || ""})),
   async planDelete(list) {
@@ -484,7 +509,7 @@ const api = {
 };
 
 // ---------- State ----------
-const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), open: new Set(), areas: [], haFloors: [], z2mBases: [], z2mUis: [], bridges: [], gateways: {}, gwFilter: "", facets: {}, permitUntil: {}, permitReal: {}, editing: null, storeLoaded: false, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: true, updateYaml: false, updateNodered: false, deleteForce: true, showServices: false};
+const S = {devices: [], scheme: clone(DEFAULT_SCHEME), meta: {}, planned: [], filter: "all", q: "", sel: new Set(), open: new Set(), areas: [], haFloors: [], z2mBases: [], z2mUis: [], bridges: [], gateways: {}, gwFilter: "", facets: {}, permitUntil: {}, permitReal: {}, editing: null, storeLoaded: false, renameZ2m: true, renameEntities: true, setArea: true, updateRefs: true, updateYaml: false, updateNodered: false, deleteForce: true, showServices: false, namingV2: false, haVersion: ""};
 /** Haken beim Umbenennen und Löschen (und „Dienste zeigen“) – werden im Store gemerkt. */
 const OPTION_KEYS = ["setArea", "renameZ2m", "renameEntities", "updateRefs", "updateYaml", "updateNodered", "deleteForce", "showServices"];
 
@@ -825,6 +850,7 @@ function renderDevices() {
       <span style="flex:1"></span>
       <button class="btn" id="fromNames" title="Liest Haus, Etage, Raum und Typ aus den vorhandenen Namen (nach deinen Kürzeln) und wählt sie aus. Passende Namen bleiben unverändert.">⟳ Aus Namen zuordnen</button>
       <button class="btn" id="checkRefs" title="Sucht in Automationen, Skripten, Szenen und Dashboards nach Entitäten, die es nicht mehr gibt (z. B. nach einer Umbenennung), und ersetzt sie durch die richtigen">🔍 Verweise prüfen</button>
+      <button class="btn" id="checkNames" title="Eigene Entitätsnamen und Bereiche ohne Etage prüfen – ab Home Assistant 2026.11 setzt HA den Gerätenamen selbst vor die Entität und zeigt Bereich und Etage dazu">🔤 Namen prüfen${S.namingV2 ? "" : " (2026.11)"}</button>
       <button class="btn" id="reload" title="Liest alle Geräte neu aus Home Assistant">↻ Neu laden</button>
       <button class="btn" id="addPlanned">＋ Neues Gerät planen</button>
     </div>
@@ -864,7 +890,8 @@ function renderDevices() {
         const s = sug.get(d.id), r = roomOf(d), t = typeOf(d), off = membersOf(d).every(m => m.disabled);
         const nameCell = S.editing === d.id
           ? `<input id="edit" value="${esc(d.name)}">`
-          : esc(d.name) + (d.area ? `<div class="sub">HA-Bereich: ${esc(d.area)}</div>` : "")
+          : esc(d.name) + (d.part_of ? `<div class="sub" title="Kind-Gerät: Teil eines anderen Geräts (z. B. eine Dose einer Steckdosenleiste). Wird nur in Home Assistant benannt und mit dem Hauptgerät gelöscht.">Teil von ${esc(d.part_of)}</div>` : "")
+            + (d.area ? `<div class="sub">HA-Bereich: ${esc(d.area)}</div>` : "")
             + (d.service || off ? `<div class="sub">${[d.service && "Dienst", off && "in HA deaktiviert"].filter(Boolean).join(" · ")}</div>` : "")
             + (d.members ? `<button class="grpT" title="Dasselbe Gerät steht über mehrere Integrationen in Home Assistant. Name, Haus, Etage, Raum und Typ gelten für alle Einträge; aufgeklappt hat jeder Eintrag seine eigenen Links.">${S.open.has(d.id) ? "▾" : "▸"} ${d.members.length} Einträge in HA</button>` : "");
         const memberRow = m => `<tr class="member" data-mid="${m.id}">
@@ -925,6 +952,7 @@ function renderDevices() {
   };
   $("#reload", root).onclick = async () => { await refreshFromHA(); renderDevices(); };
   $("#checkRefs", root).onclick = () => checkReferences();
+  $("#checkNames", root).onclick = () => checkNames();
   $("#addPlanned", root).onclick = () => {
     const name = prompt("Name des geplanten Geräts (wird reserviert, damit die Nummer nicht doppelt vergeben wird):");
     if (name?.trim()) { S.planned.push({id: uid("p_"), name: name.trim()}); persist(); renderDevices(); }
@@ -1008,6 +1036,8 @@ function confirmPlan(plan, count, mode = "rename") {
           : i.reason === "nomatch" ? `keine Entity-ID beginnt mit dem alten Namen – deshalb bleibt sie unverändert<br><span class="sub">${list}</span>` : "keine Änderung");
       }).join("<br>") || "keine"}</div>` : ""}
       ${plan.skipped.length ? `<p class="sub">Übersprungen: ${plan.skipped.map(s => esc(s.old) + " (" + esc(s.reason) + ")").join(", ")}</p>` : ""}
+      ${!areaOnly && !idsOnly && (plan.entity_names || []).length ? `<p class="sub" style="margin-top:12px">Eigene Entitätsnamen, die mitziehen (${plan.entity_names.length}):</p>
+      <div class="preview" style="max-height:120px;overflow:auto">${plan.entity_names.map(n => `${esc(n.old)} → <b>${n.new === null ? `<span class="sub">(Standard von HA: ${esc(n.device)} + Entität)</span>` : esc(n.new)}</b>`).join("<br>")}</div>` : ""}
       ${refs ? `<p class="sub" style="margin-top:12px">Verweise, die angepasst werden (${plan.usages.length}):</p>
       <div class="preview" style="max-height:160px;overflow:auto">${plan.usages.map(u => `${kinds[u.kind] || u.kind}: <b>${esc(u.title)}</b> <span class="sub">(${u.entities.length} Entität${u.entities.length == 1 ? "" : "en"})</span>`).join("<br>") || (plan.entities.length ? "keine gefunden" : "nichts zu ersetzen, weil sich keine Entity-ID ändert")}</div>
       ${plan.unreadable ? `<p class="sub">${plan.unreadable} Automationen/Szenen sind nicht über die Oberfläche lesbar (YAML) und werden <b>nicht</b> angepasst.</p>` : ""}
@@ -1074,6 +1104,7 @@ async function refreshFromHA(quiet = false) {
     const data = await api.load();
     if (api.error) { api.error = null; return; }
     S.devices = data.devices; S.bridges = data.bridges || S.bridges; S.areas = data.areas || S.areas; S.haFloors = data.floors || S.haFloors;
+    S.namingV2 = !!data.naming_v2; S.haVersion = data.ha_version || "";
     if (!quiet) toast("Liste neu aus Home Assistant geladen");
   } catch (e) { if (!quiet) toast("Neu laden fehlgeschlagen: " + e.message); }
 }
@@ -1295,7 +1326,7 @@ async function checkReferences() {
     const norm = t => (t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ");
     dlg.querySelectorAll(".pick").forEach(pk => {
       const old = pk.dataset.old, inp = $("input", pk), res = $(".pickres", pk), list = choices(old);
-      const pickable = list.map(c => ({c, hay: norm(c.name + " " + c.id)})).sort((a, b) => label(a.c).localeCompare(label(b.c), "de", {numeric: true}));
+      const pickable = list.map(c => ({c, hay: norm(c.name + " " + c.id + " " + (c.ctx || ""))})).sort((a, b) => label(a.c).localeCompare(label(b.c), "de", {numeric: true}));
       const show = () => {
         const cur = list.find(c => c.id === chosen[old]), q = inp.value === label(cur) ? "" : inp.value, words = norm(q).split(" ").filter(Boolean);
         const hits = pickable.filter(x => words.every(w => x.hay.includes(w)));
@@ -1335,6 +1366,81 @@ async function checkReferences() {
     });
   };
   const load = async () => { draw(null); try { draw(await api.checkRefs()); } catch (e) { close(); toast("Prüfen fehlgeschlagen: " + e.message); } };
+  document.body.appendChild(dlg); dlg.showModal(); dlg.oncancel = close;
+  await load();
+}
+
+/** „🔤 Namen prüfen“: Ab Home Assistant 2026.11 setzt HA den Gerätenamen selbst vor die Entität (und zeigt Bereich/Etage
+ *  dazu). Zeigt eigene Entitätsnamen – heute und danach –, schlägt vor, überflüssige oder veraltete zurückzusetzen, und
+ *  ordnet Bereiche ohne Etage einer Etage zu. Funktioniert vor dem Update (Vorbereitung) und danach (Aufräumen). */
+async function checkNames() {
+  const dlg = document.createElement("dialog");
+  dlg.style.cssText = "max-width:760px;width:94%;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);padding:20px";
+  const close = () => { dlg.close(); dlg.remove(); };
+  const title = v2 => v2 ? "🔤 Namen prüfen" : "🔤 Namen prüfen – Vorbereitung auf Home Assistant 2026.11";
+  // Etage, die die Geräte eines Bereichs im Namensschema haben (nur ausdrücklich gewählte/aus dem Namen erkannte, eindeutig)
+  const floorFor = areaId => {
+    const ids = [...new Set(S.devices.filter(d => d.area_id === areaId).map(d => S.scheme.floors.find(f => f.id === S.meta[d.id]?.floor)?.floor_id).filter(Boolean))];
+    return ids.length === 1 ? ids[0] : "";
+  };
+  const draw = (r, note = "") => {
+    if (!r) { dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${title(S.namingV2)}</h2><p class="sub"><span class="spin"></span> Lese Entitäten, Geräte und Bereiche …</p>`; return; }
+    const v2 = r.v2, after = v2 ? "jetzt" : "ab 2026.11";
+    const sugg = r.entities.filter(e => ["old_dev", "dup", "same"].includes(e.kind)), custom = r.entities.filter(e => e.kind === "custom"), ok = r.entities.filter(e => e.kind === "ok");
+    const why = e => e.kind === "old_dev" ? `beginnt mit „${esc(e.prefix)}“ statt mit dem Gerätenamen (meist ein früherer Name)${v2 ? "" : ` – ab 2026.11 stünde „${esc(e.device)}“ zusätzlich davor`}`
+      : e.kind === "dup" ? "der Gerätename steht doppelt – Home Assistant setzt ihn selbst davor"
+      : "gleich dem Namen der Integration – überflüssig; ohne eigenen Namen übersetzt Home Assistant ihn auch";
+    const line = (e, i, list, checked, action) => `<label style="display:block;padding:7px 0;border-bottom:1px solid var(--line)">
+        <input type="checkbox" class="ent" data-list="${list}" data-i="${i}"${checked ? " checked" : ""}> <code>${esc(e.entity_id)}</code> <span class="sub">· ${esc(e.device)}</span>
+        <div class="sub" style="margin:3px 0 0 22px">heute: <b>${esc(e.now)}</b> → ${after}: <b>${esc(e.after)}</b>${action ? ` · angehakt: ${action}` : ""}</div>
+        ${list === "s" ? `<div class="sub" style="margin:2px 0 0 22px">${why(e)}</div>` : ""}</label>`;
+    const floors = Object.entries(r.floors || {});
+    const areaRow = (a, i) => { const pick = floorFor(a.id);
+      return `<div class="row" style="margin:4px 0"><label style="min-width:180px"><input type="checkbox" class="area" data-i="${i}"${pick ? " checked" : ""}> ${esc(a.name)}</label>
+        <select class="areaFloor" data-i="${i}"><option value="">– Etage wählen –</option>${floors.map(([id, name]) => `<option value="${esc(id)}"${id === pick ? " selected" : ""}>${esc(name)}</option>`).join("")}</select></div>`; };
+    const nothing = !sugg.length && !custom.length && !r.areas_without_floor.length;
+    dlg.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">${title(v2)}</h2>
+      ${note}
+      <p class="sub">${v2 ? `Home Assistant ${esc(r.ha_version)} setzt Anzeigenamen aus <b>Gerät + Entität</b> zusammen und zeigt Bereich und Etage dazu, wo es hilft.`
+        : `Home Assistant ${esc(r.ha_version || "")} – ab <b>2026.11</b> setzt Home Assistant den Gerätenamen selbst vor den Namen einer Entität und zeigt Bereich und Etage dazu. Eigene Entitätsnamen, die mit dem Gerätenamen beginnen, kürzt Home Assistant beim Update selbst.`}
+        Entity-IDs, Automationen und Dashboards ändern sich dadurch nicht – nur die Anzeige.</p>
+      ${nothing && !ok.length ? `<p>✅ Keine eigenen Entitätsnamen und keine Bereiche ohne Etage – nichts vorzubereiten.</p>` : ""}
+      <div style="max-height:56vh;overflow:auto">
+      ${sugg.length ? `<h3 style="font-size:14px;margin:12px 0 4px">Vorschläge (${sugg.length})</h3>
+        <p class="sub" style="margin:0 0 4px">Angehakt wird der eigene Name entfernt – Home Assistant zeigt dann seinen Standard.</p>
+        ${sugg.map((e, i) => line(e, i, "s", e.suggest, e.new === null ? "Name zurücksetzen" : `„${esc(e.new)}“`)).join("")}` : ""}
+      ${r.areas_without_floor.length ? `<h3 style="font-size:14px;margin:14px 0 4px">Bereiche ohne Etage (${r.areas_without_floor.length})</h3>
+        <p class="sub" style="margin:0 0 4px">${floors.length ? "Ab 2026.11 zeigt Home Assistant die Etage als Zusammenhang zum Namen. Vorausgewählt ist die Etage, die die Geräte im Namensschema haben."
+          : "In Home Assistant sind keine Etagen angelegt (Einstellungen → Bereiche, Etagen & Zonen). Danach hier erneut prüfen – das Add-on übernimmt sie auch ins Namensschema."}</p>
+        ${floors.length ? r.areas_without_floor.map(areaRow).join("") : `<p class="sub">${r.areas_without_floor.map(a => esc(a.name)).join(", ")}</p>`}` : ""}
+      ${custom.length ? `<details style="margin-top:14px"><summary><b>Eigene Namen (${custom.length})</b> <span class="sub">– ${v2 ? "mit dem Gerätenamen davor" : "ab 2026.11 mit dem Gerätenamen davor"}</span></summary>
+        <p class="sub" style="margin:4px 0">Passt der Name so, nichts tun. Sonst anhaken: der eigene Name wird entfernt und Home Assistant zeigt seinen Standard.</p>
+        ${custom.map((e, i) => line(e, i, "c", false, `„${esc(e.reset)}“`)).join("")}</details>` : ""}
+      ${ok.length ? `<details style="margin-top:10px"><summary><b>Kürzt Home Assistant selbst (${ok.length})</b> <span class="sub">– nichts zu tun</span></summary>
+        <div class="sub" style="margin-top:4px">${ok.map(e => `<code>${esc(e.entity_id)}</code>: ${esc(e.now)} → ${esc(e.after)}`).join("<br>")}</div></details>` : ""}
+      </div>
+      ${v2 ? "" : `<p class="sub" style="margin-top:12px">Tipp: Der Gerätename nach deinem Schema (z. B. <code>S2-WZEL-LSP03</code>) bleibt, wie er ist. Eigene Entitätsnamen, die das Add-on beim Umbenennen mitzieht, werden schon heute so gesetzt, dass Home Assistant sie beim Update sauber kürzt.</p>`}
+      <div class="row" style="justify-content:flex-end;margin:16px 0 0"><button class="btn" id="again">Erneut prüfen</button>${nothing ? "" : `<button class="btn primary" id="go">Ausführen</button>`}<button class="btn" id="close">Schließen</button></div>`;
+    $("#close", dlg).onclick = close;
+    $("#again", dlg).onclick = () => load();
+    dlg.querySelectorAll(".areaFloor").forEach(sel => sel.onchange = () => { dlg.querySelector(`.area[data-i="${sel.dataset.i}"]`).checked = !!sel.value; });
+    $("#go", dlg) && ($("#go", dlg).onclick = async () => {
+      const lists = {s: sugg, c: custom};
+      const ents = [...dlg.querySelectorAll(".ent:checked")].map(x => lists[x.dataset.list][+x.dataset.i]).map(e => ({entity_id: e.entity_id, old: e.name, new: e.new ?? null}));
+      const areas = [...dlg.querySelectorAll(".area:checked")].map(x => ({...r.areas_without_floor[+x.dataset.i], floor_id: dlg.querySelector(`.areaFloor[data-i="${x.dataset.i}"]`).value}))
+        .filter(a => a.floor_id).map(a => ({area_id: a.id, name: a.name, floor_id: a.floor_id}));
+      if (!ents.length && !areas.length) { toast("Nichts angehakt"); return; }
+      $("#go", dlg).disabled = true; $("#go", dlg).textContent = "Läuft …";
+      try {
+        const res = await api.namesFix(ents, areas);
+        const msg = (res.done.length ? `<p>✅ ${res.done.length} Entitätsname(n) geändert.</p>` : "") + (res.areas_done.length ? `<p>✅ ${res.areas_done.length} Bereich(e) einer Etage zugeordnet.</p>` : "")
+          + (res.errors || []).map(e => `<p>❌ <b>${esc(e.device)}</b> <span class="sub">${esc(e.error)}</span></p>`).join("");
+        if (res.areas_done.length) { await refreshFromHA(true); syncFloors(); renderDevices(); }
+        draw(await api.names(), msg);
+      } catch (e) { toast("Fehlgeschlagen: " + e.message); draw(r, note); }
+    });
+  };
+  const load = async () => { draw(null); try { draw(await api.names()); } catch (e) { close(); toast("Prüfen fehlgeschlagen: " + e.message); } };
   document.body.appendChild(dlg); dlg.showModal(); dlg.oncancel = close;
   await load();
 }
@@ -1997,7 +2103,7 @@ function renderExport() {
 
 const toCsv = rows => { const h = Object.keys(rows[0] || {name: ""}); return [h, ...rows.map(o => h.map(k => o[k] ?? ""))].map(l => l.map(v => `"${String(v).replaceAll('"', '""')}"`).join(";")).join("\n"); };
 const fmtDate = iso => { const d = new Date(iso); return isNaN(d) ? iso || "" : d.toLocaleString("de-DE", {dateStyle: "medium", timeStyle: "short"}); };
-const BACKUP_REASONS = {auto: "nach Änderungen", taeglich: "täglich", manuell: "von Hand", "vor-umbenennen": "vor dem Umbenennen", "vor-raum": "vor dem Raum-Zuweisen", "vor-loeschen": "vor dem Löschen", "vor-wiederherstellen": "vor einer Wiederherstellung"};
+const BACKUP_REASONS = {auto: "nach Änderungen", taeglich: "täglich", manuell: "von Hand", "vor-umbenennen": "vor dem Umbenennen", "vor-raum": "vor dem Raum-Zuweisen", "vor-loeschen": "vor dem Löschen", "vor-wiederherstellen": "vor einer Wiederherstellung", "vor-namen": "vor dem Ändern von Entitätsnamen", "vor-tauschen": "vor dem Neu-Zuordnen", "vor-entfernen": "vor dem Entfernen doppelter Entitäten"};
 
 /** Liste der Sicherungen im Export-Tab. */
 async function renderBackups() {
@@ -2047,6 +2153,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   const st = data.store || {};
   S.gateways = st.gateways || {};
   S.areas = data.areas || []; S.haFloors = data.floors || [];
+  S.namingV2 = !!data.naming_v2; S.haVersion = data.ha_version || "";
   if (st.scheme?.pattern) S.scheme = {houses: clone(DEFAULT_SCHEME.houses), defaultHouse: DEFAULT_SCHEME.defaultHouse, floors: clone(DEFAULT_SCHEME.floors), ...st.scheme};
   S.meta = st.meta || {}; S.planned = st.planned || []; S.network = st.network || {};
   for (const k of OPTION_KEYS) if (typeof st.options?.[k] === "boolean") S[k] = st.options[k];
